@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 环境变量与密钥
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# 本地数据与上传（私有内容，不入库）
+data/
+uploads/
+
+# 日志
+*.log
+mcp_debug.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
