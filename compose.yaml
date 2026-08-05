@@ -1,0 +1,36 @@
+# 阶段 0 单栈：api（数据与业务全部在此）+ ui（纯客户端）
+# 对外只暴露 ui:8501；api:8000 仅栈内可达；数据统一在命名卷 rag-data
+name: rag-knowledge-assistant
+
+services:
+  api:
+    build: .
+    environment:
+      DATA_DIR: /data
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+    volumes:
+      - rag-data:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  ui:
+    build: .
+    command: ["/usr/local/bin/ui_entrypoint.sh"]
+    environment:
+      API_URL: http://api:8000
+      UI_PORT: "8501"
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  rag-data:
