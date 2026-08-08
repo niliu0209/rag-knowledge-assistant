@@ -38,17 +38,21 @@ TOKENS = {
 
 
 def inject_theme() -> None:
-    """注入全局 CSS（仅入口页调用一次）。"""
+    """注入全局 CSS（仅入口页调用一次）。
+
+    v002 主题策略（查证：Streamlit 1.61 无 CSS 主题变量，组件颜色由前端按
+    isDark 内联注入）——颜色全权交给 Streamlit 主题：浅色/夜间模式自动统一，
+    本注入只保留字体、字号与断点，不硬编码背景/正文色，避免夜间模式割裂。
+    token 颜色表为设计语义基准（浅色模式参考），不进 CSS。
+    """
     t = TOKENS
     st.markdown(
         f"""
         <style>
         html, body, .stApp {{
             font-family: {t["font_family"]};
-            color: {t["color_text"]};
         }}
         .stApp {{
-            background: {t["color_bg"]};
             font-size: {t["font_size_base"]};
         }}
         /* 手机断点：保证"能读能问" */
