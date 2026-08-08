@@ -19,4 +19,4 @@ if [ "$COUNT" -ge 30 ]; then
     echo "[ui] ERROR: api not ready after 30s at $API_URL" >&2
 fi
 
-exec streamlit run ui/app.py --server.port "${UI_PORT:-8501}" --server.address 0.0.0.0
+exec streamlit run ui/main.py --server.port "${UI_PORT:-8501}" --server.address 0.0.0.0
