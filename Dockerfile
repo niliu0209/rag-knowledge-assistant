@@ -10,6 +10,7 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 COPY pyproject.toml ./
 COPY app ./app
 COPY ui ./ui
+COPY rag ./rag
 COPY ui_entrypoint.sh /usr/local/bin/ui_entrypoint.sh
 RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" . \
     && chmod +x /usr/local/bin/ui_entrypoint.sh

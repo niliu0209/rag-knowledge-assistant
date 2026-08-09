@@ -12,6 +12,7 @@ import streamlit as st
 from app.core.config import get_settings
 from ui.provider_page import render as render_provider_page
 from ui.theme import inject_theme
+from ui.upload_page import render as render_upload_page
 
 st.set_page_config(page_title="知识库问答助手", page_icon="📚", layout="wide")
 inject_theme()
@@ -20,9 +21,13 @@ settings = get_settings()
 
 page = st.sidebar.radio(
     "导航",
-    options=["首页", "提供商配置"],
+    options=["首页", "文档上传", "提供商配置"],
     label_visibility="collapsed",
 )
+
+if page == "文档上传":
+    render_upload_page(settings.api_url)
+    st.stop()
 
 if page == "提供商配置":
     render_provider_page(settings.api_url)
