@@ -55,10 +55,13 @@ def inject_theme() -> None:
         .stApp {{
             font-size: {t["font_size_base"]};
         }}
-        /* 手机断点：保证"能读能问" */
+        /* 手机断点：保证"能读能问"。
+        v003：Streamlit 1.61 移动端顶部 header 固定且高 3.75rem(60px)，
+        故 padding-top 必须 ≥4.75rem 为其让位（曾因 padding 简写覆盖顶部
+        让位导致标题被遮挡；规则见 dev-docs/design/README.md 移动端布局规则）。 */
         @media (max-width: 600px) {{
             .stApp {{ font-size: 14px; }}
-            .block-container {{ padding: 1rem; }}
+            .block-container {{ padding: 1rem 1rem 1rem; padding-top: 4.75rem; }}
         }}
         </style>
         """,
