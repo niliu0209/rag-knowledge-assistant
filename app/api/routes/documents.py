@@ -12,7 +12,9 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.services.ingest import (
+    DocumentDeleteError,
     DocumentIngestService,
+    DocumentNotFoundError,
     DuplicateDocumentError,
     EmbeddingFailedError,
     FileTooLargeError,
@@ -36,6 +38,8 @@ _STATUS_MAP = {
     NoTextError: 422,
     EmbeddingFailedError: 502,
     InternalIngestError: 500,
+    DocumentNotFoundError: 404,
+    DocumentDeleteError: 500,
 }
 
 
@@ -68,6 +72,21 @@ def create_documents_router(
                 detail={"error": {"code": "embedding_mismatch", "message": str(exc)}},
             ) from exc
 
+    @router.get("/api/documents")
+    def list_documents():
+        return service.list_documents()
+
+    @router.delete("/api/documents/{doc_id}")
+    def delete_document(doc_id: str):
+        try:
+            service.delete_document(doc_id)
+        except IngestError as exc:
+            raise HTTPException(
+                status_code=_STATUS_MAP.get(type(exc), 500),
+                detail={"error": {"code": _code_of(exc), "message": str(exc)}},
+            ) from exc
+        return {"ok": True}
+
     return router
 
 
@@ -80,4 +99,6 @@ def _code_of(exc: IngestError) -> str:
         EmbeddingFailedError: "embedding_failed",
         InternalIngestError: "internal_error",
         NoTextError: "no_text",
+        DocumentNotFoundError: "document_not_found",
+        DocumentDeleteError: "document_delete_failed",
     }.get(type(exc), "ingest_failed")

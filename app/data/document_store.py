@@ -77,5 +77,21 @@ def update_document_status(
     )
 
 
-def get_document(conn: sqlite3.Connection, doc_id: str) -> sqlite3.Row | None:
+def get_document(
+    conn: sqlite3.Connection, doc_id: str, user_id: str = ""
+) -> sqlite3.Row | None:
+    """按 id 查记录；user_id 非空时强制过滤（权限节：所有查询强制 user_id）。"""
+    if user_id:
+        return conn.execute(
+            "SELECT * FROM documents WHERE id = ? AND user_id = ?", (doc_id, user_id)
+        ).fetchone()
     return conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+
+
+def list_documents(conn: sqlite3.Connection, user_id: str) -> list[sqlite3.Row]:
+    """已入库文档清单（F0-2 最小版：仅 ready；failed 痕迹由重试替换覆盖）。"""
+    return conn.execute(
+        "SELECT * FROM documents WHERE user_id = ? AND status = 'ready' "
+        "ORDER BY created_at DESC, id",
+        (user_id,),
+    ).fetchall()

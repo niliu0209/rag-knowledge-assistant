@@ -10,6 +10,7 @@ import httpx
 import streamlit as st
 
 from app.core.config import get_settings
+from ui.documents_page import render as render_documents_page
 from ui.provider_page import render as render_provider_page
 from ui.theme import inject_theme
 from ui.upload_page import render as render_upload_page
@@ -21,12 +22,16 @@ settings = get_settings()
 
 page = st.sidebar.radio(
     "导航",
-    options=["首页", "文档上传", "提供商配置"],
+    options=["首页", "文档上传", "文档列表", "提供商配置"],
     label_visibility="collapsed",
 )
 
 if page == "文档上传":
     render_upload_page(settings.api_url)
+    st.stop()
+
+if page == "文档列表":
+    render_documents_page(settings.api_url)
     st.stop()
 
 if page == "提供商配置":

@@ -69,6 +69,14 @@ class InternalIngestError(IngestError):
     """未预期内部故障（存储等，api 映射 500 internal_error）。"""
 
 
+class DocumentNotFoundError(IngestError):
+    """删除目标不存在（api 映射 404 document_not_found）。"""
+
+
+class DocumentDeleteError(IngestError):
+    """删除失败且补偿回滚完成（api 映射 500 document_delete_failed）。"""
+
+
 class DocumentIngestService:
     def __init__(self, data_dir: Path, provider: ProviderService) -> None:
         self.data_dir = data_dir
@@ -193,6 +201,69 @@ class DocumentIngestService:
             raise InternalIngestError("入库失败，请重试或检查服务状态") from exc
 
     # ---------- 校验 ----------
+
+    # ---------- 列表与删除（F0-2） ----------
+
+    def list_documents(self, user_id: str = USER_ID) -> list[dict]:
+        """已入库文档清单（名称/分类/页数/入库时间，F0-2 API 合同）。"""
+        with get_connection(self.data_dir) as conn:
+            rows = document_store.list_documents(conn, user_id)
+        return [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "category": r["category"],
+                "page_count": r["page_count"],
+                "char_count": r["char_count"],
+                "status": r["status"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def delete_document(self, doc_id: str, user_id: str = USER_ID) -> None:
+        """删除文档：SQLite 记录 + Chroma 切片 + 上传文件同步删除。
+
+        顺序保证可补偿：先删 SQLite（事务，失败无副作用）→ 删 Chroma（失败则
+        重插 SQLite 记录回滚，抛 DocumentDeleteError）→ 删文件（失败仅磁盘残留，
+        日志警告不阻断——本地单机文件系统，残留无害）。
+        """
+        with get_connection(self.data_dir) as conn:
+            row = document_store.get_document(conn, doc_id, user_id)
+        if row is None:
+            raise DocumentNotFoundError("文档不存在或已删除")
+
+        try:
+            with get_connection(self.data_dir) as conn:
+                document_store.delete_document(conn, doc_id)
+            chroma_store.delete_by_doc_id(
+                chroma_store.get_collection(self.data_dir), doc_id
+            )
+        except DocumentNotFoundError:
+            raise
+        except Exception as exc:  # noqa: BLE001——删除失败走补偿回滚（F0-2 验收）
+            logger.exception("删除文档失败（doc_id=%s），补偿回滚", doc_id)
+            try:
+                with get_connection(self.data_dir) as conn:
+                    if document_store.get_document(conn, doc_id, user_id) is None:
+                        document_store.insert_document(
+                            conn,
+                            user_id=row["user_id"],
+                            doc_id=row["id"],
+                            name=row["name"],
+                            category=row["category"],
+                            file_path=row["file_path"],
+                            status=row["status"],
+                        )
+            except Exception:  # noqa: BLE001——补偿尽力而为
+                logger.exception("删除补偿回滚失败（doc_id=%s）", doc_id)
+            raise DocumentDeleteError("删除失败，数据已回滚，请重试") from exc
+
+        try:
+            Path(row["file_path"]).unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("上传文件删除失败（doc_id=%s）: %s", doc_id, exc)
+        logger.info("文档删除成功: %s（doc_id=%s）", row["name"], doc_id)
 
     def _validate(self, filename: str, content: bytes, category: str) -> str:
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
