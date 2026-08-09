@@ -17,6 +17,7 @@ from app import __version__
 from app.api.routes.documents import create_documents_router
 from app.api.routes.health import create_health_router
 from app.api.routes.providers import create_providers_router
+from app.api.routes.qa import create_qa_router
 from app.core.config import get_settings
 from app.data.db import get_connection
 from app.data.migrations import apply_migrations
@@ -45,6 +46,9 @@ def create_app(
     )
     app.include_router(
         create_documents_router(data_dir, provider_transport=provider_transport)
+    )
+    app.include_router(
+        create_qa_router(data_dir, provider_transport=provider_transport)
     )
     return app
 

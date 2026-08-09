@@ -95,3 +95,43 @@ def list_documents(conn: sqlite3.Connection, user_id: str) -> list[sqlite3.Row]:
         "ORDER BY created_at DESC, id",
         (user_id,),
     ).fetchall()
+
+
+def get_documents_by_ids(
+    conn: sqlite3.Connection, user_id: str, doc_ids: list[str]
+) -> dict[str, str]:
+    """批量查文档名（QaService 引用构造用）；返回 {doc_id: name}，缺失的 doc_id 不在内。"""
+    if not doc_ids:
+        return {}
+    placeholders = ",".join("?" for _ in doc_ids)
+    rows = conn.execute(
+        f"SELECT id, name FROM documents WHERE user_id = ? AND id IN ({placeholders})",
+        (user_id, *doc_ids),
+    ).fetchall()
+    return {row["id"]: row["name"] for row in rows}
+
+
+def insert_qa_record(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    question: str,
+    retrieved_chunks: str,
+    answer: str,
+    provider: str,
+    latency_ms: int | None,
+) -> None:
+    """写入问答记录（F0-5，qa_records 字段见 migrations.py v001）。"""
+    conn.execute(
+        "INSERT INTO qa_records (id, user_id, question, retrieved_chunks, answer, provider, latency_ms) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            str(uuid.uuid4()),
+            user_id,
+            question,
+            retrieved_chunks,
+            answer,
+            provider,
+            latency_ms,
+        ),
+    )

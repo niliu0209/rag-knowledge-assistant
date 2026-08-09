@@ -25,12 +25,14 @@ logger = logging.getLogger(__name__)
 # 免费预设清单：2026-08-08 真实调用验证（chat/completions 与 embeddings 均可用，
 # bge-m3 维度 1024；v1/models 无免费标志字段，免费判定靠本清单 + 试调用）。
 # 免费政策多变（RPM/TPM 限流、模型可能下架）→ 运行时 429 退避 + 失败提示切换。
+# 2026-08-09 S4 检索质量实测：7B 生成质量差（数字错误/自相矛盾/乱码），
+# Qwen3-14B 实测 5 问 5/5 准确（含表格竖排 PDF），默认预设升级为 14B。
 DEFAULT_PRESET: dict[str, str] = {
     "id": "siliconflow-free",
     "name": "SiliconFlow 免费预设",
     "provider": "siliconflow",
     "base_url": "https://api.siliconflow.cn/v1",
-    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "model": "Qwen/Qwen3-14B",
     "embedding_model": "BAAI/bge-m3",
 }
 
