@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 # 检索参数（owner：services/qa.py，architecture.md 链路二 top-5）
 TOP_K = 5
 
+# 检索相关阈值（S1-1 实测校准，2026-08-09）：
+# Chroma 集合为默认 l2 空间；真实文档（bge-m3 中文）实测距离分布——
+# 命中问题 top-1 距离 ≤0.925，无关问题 top-1 距离 ≥1.031，取 0.98 完全分隔
+# （命中侧余量 0.055，无关侧余量 0.051）。distance > 阈值的片段视为无关，
+# 不进入引用——检索层判定替代"依赖 LLM 判断片段无关"（阶段 0 remaining_risk）。
+RELEVANCE_DISTANCE_THRESHOLD: float = 0.98
+
 # 诚实回答：检索无结果时明确说明，不编造（F0-3 边界）
 HONEST_NO_RESULT = "知识库中没有相关内容"
 
@@ -73,9 +80,11 @@ class QaService:
 
         collection = chroma_store.get_collection(self.data_dir)
         hits = chroma_store.query_chunks(collection, query_vector, user_id, TOP_K)
+        # S1-1：低相关片段按相似度阈值过滤（检索层判定无关，见常量注释）
+        relevant_hits = [h for h in hits if h["distance"] <= RELEVANCE_DISTANCE_THRESHOLD]
 
         provider_label = f"{cfg['provider']} · {cfg['model']}"
-        citations, snippets = self._build_references(user_id, hits)
+        citations, snippets = self._build_references(user_id, relevant_hits)
         if citations:
             prompt = self._build_prompt(question.strip(), snippets)
             try:
@@ -83,13 +92,13 @@ class QaService:
             except ProviderError as exc:
                 raise LlmFailedError(f"大模型生成失败：{exc}") from exc
         else:
-            # 检索无结果（或命中片段对应的文档均已删除）：诚实回答，不调 LLM
+            # 检索无结果 / 全部片段低于相关阈值 / 命中文档均已删除：诚实回答，不调 LLM
             answer = HONEST_NO_RESULT
 
         self._record(
             user_id=user_id,
             question=question.strip(),
-            snippets=snippets,
+            snippets=self._record_snapshot(user_id, hits, relevant_hits),
             answer=answer,
             provider=provider_label,
             started=start,
@@ -131,6 +140,30 @@ class QaService:
         with get_connection(self.data_dir) as conn:
             return document_store.get_documents_by_ids(conn, user_id, doc_ids)
 
+    def _record_snapshot(
+        self, user_id: str, hits: list[dict], relevant_hits: list[dict]
+    ) -> list[dict]:
+        """记录快照：全部检索结果（含被过滤片段）+ distance + relevant 标记。
+
+        供检索质量评估（F0-5）：阈值过滤是否误伤真实命中、无关片段分布可回溯。
+        page 缺失（docx）时省略键（与引用构造一致）；hits 元素按值比较判相关。
+        """
+        names = self._document_names(user_id, [h["doc_id"] for h in hits])
+        rows: list[dict] = []
+        for h in hits:
+            row: dict = {
+                "doc_id": h["doc_id"],
+                "document_name": names.get(h["doc_id"]),
+                "chunk_index": h["chunk_index"],
+                "snippet": h["snippet"],
+                "distance": h["distance"],
+                "relevant": h in relevant_hits,
+            }
+            if h["page"] is not None:
+                row["page"] = h["page"]
+            rows.append(row)
+        return rows
+
     # ---------- prompt 构造（编号片段 + 诚实回答指令） ----------
 
     @staticmethod
@@ -147,6 +180,8 @@ class QaService:
             "要求：",
             "1. 片段中没有答案时，直接回答“知识库中没有相关内容”。",
             "2. 不得编造片段之外的信息；引用片段中的事实，不确定就明确说明。",
+            "3. 区分价格与规格：片段中的数量、张数、规格（如“500 张/包”）不是价格；"
+            "回答价格须引用明确的金额数字，不确定就如实说明。",
         ]
         return "\n".join(parts)
 

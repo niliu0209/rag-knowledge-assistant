@@ -16,6 +16,7 @@ from app.data import chroma_store, document_store
 from app.data.db import get_connection
 from app.services.provider import ProviderService
 from app.services.qa import (
+    RELEVANCE_DISTANCE_THRESHOLD,
     EmptyQuestionError,
     EmbeddingFailedError,
     LlmFailedError,
@@ -164,7 +165,8 @@ def test_ask_returns_answer_with_citations(data_dir):
     assert result["provider"]
 
 
-def test_ask_ranks_all_top5_chunks_in_citations(data_dir):
+def test_ask_filters_low_relevance_chunk(data_dir):
+    """S1-1：相似度阈值过滤——低相关片段（distance > 阈值）不再进引用。"""
     doc_id = _seed(
         data_dir,
         chunks=[
@@ -174,8 +176,8 @@ def test_ask_ranks_all_top5_chunks_in_citations(data_dir):
     )
     result = _make_service(data_dir).ask("办公用品采购花了多少钱？")
 
-    # top-5 内两切片都进引用，且按相似度排序：命中的 chunk0 在前
-    assert [c["chunk_index"] for c in result["citations"]] == [0, 1]
+    # l2 距离：chunk0 命中（0.0 ≤ 阈值）保留，chunk1 低相关（≈1.414 > 阈值）过滤
+    assert [c["chunk_index"] for c in result["citations"]] == [0]
     assert all(c["document_id"] == doc_id for c in result["citations"])
 
 
@@ -206,6 +208,31 @@ def test_ask_no_results_honest_without_llm_and_writes_record(data_dir):
     records = _qa_records(data_dir)
     assert len(records) == 1
     assert records[0]["question"] == "库里没有的问题"
+    assert records[0]["answer"] == "知识库中没有相关内容"
+
+
+def test_ask_all_irrelevant_filtered_honest_without_llm(data_dir):
+    """S1-1：检索结果全部低于阈值 → 诚实回答且不调 LLM（检索层判定，非 LLM 判断）。"""
+    calls = {"chat": 0}
+
+    def chat_counter(request: httpx.Request) -> httpx.Response:
+        calls["chat"] += 1
+        return _chat_ok(request)
+
+    _seed(
+        data_dir,
+        chunks=[
+            ("片段一", [0.0, 1.0, 0.0, 0.0], 1),
+            ("片段二", [0.0, 0.0, 1.0, 0.0], 2),
+        ],
+    )  # query 向量 [1,0,0,0] 与两者 l2 距离均 > 阈值
+    result = _make_service(data_dir, chat_handler=chat_counter).ask("与知识库无关的问题")
+
+    assert result["answer"] == "知识库中没有相关内容"
+    assert result["citations"] == []
+    assert calls["chat"] == 0, "全部片段被过滤时不得调用 LLM"
+    records = _qa_records(data_dir)
+    assert len(records) == 1
     assert records[0]["answer"] == "知识库中没有相关内容"
 
 
@@ -270,6 +297,9 @@ def test_prompt_contains_numbered_snippets_and_honest_instruction(data_dir):
     assert "[1]" in prompt and DOC_TEXT in prompt, "片段必须编号嵌入 prompt"
     assert DOC_NAME in prompt, "prompt 必须标注来源文档"
     assert "编造" in prompt, "prompt 必须包含诚实回答（不得编造）指令"
+    assert "规格" in prompt and "价格" in prompt, (
+        "prompt 必须包含区分价格与规格指令（S1-1 A4 波动修复）"
+    )
 
 
 # ---------- qa_records（F0-5） ----------
@@ -295,6 +325,29 @@ def test_qa_record_written_with_all_fields(data_dir):
     assert chunks[0]["page"] == 1
     assert chunks[0]["chunk_index"] == 0
     assert chunks[0]["document_name"] == DOC_NAME
+    assert chunks[0]["relevant"] is True, "命中片段必须标记 relevant（S1-1 记录快照）"
+
+
+def test_qa_record_snapshot_marks_distance_and_relevance(data_dir):
+    """S1-1：记录快照含全部检索结果——distance + relevant 标记（阈值效果评估）。"""
+    doc_id = _seed(
+        data_dir,
+        chunks=[
+            (DOC_TEXT, [1.0, 0.0, 0.0, 0.0], 1),
+            ("低相关片段", [0.0, 1.0, 0.0, 0.0], 2),
+        ],
+    )
+    _make_service(data_dir).ask("办公用品采购花了多少钱？")
+
+    chunks = json.loads(_qa_records(data_dir)[0]["retrieved_chunks"])
+    assert len(chunks) == 2, "记录快照必须包含全部检索结果（含被过滤片段）"
+    by_index = {c["chunk_index"]: c for c in chunks}
+    assert by_index[0]["relevant"] is True
+    assert by_index[0]["distance"] == 0.0
+    assert by_index[1]["relevant"] is False
+    assert by_index[1]["distance"] > RELEVANCE_DISTANCE_THRESHOLD
+    assert by_index[1]["document_name"] == DOC_NAME, "被过滤片段仍记录来源（评估可读）"
+    assert by_index[1]["doc_id"] == doc_id
 
 
 def test_qa_record_write_failure_does_not_block_answer(data_dir, caplog):
