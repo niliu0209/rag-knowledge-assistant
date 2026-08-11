@@ -31,6 +31,44 @@ _STATUS_MAP = {
     EmbeddingFailedError: 502,
 }
 
+# S1-3 多轮上下文：历史消息上限与单条长度上限（服务端归一化，防 prompt 膨胀）
+HISTORY_MAX_MESSAGES = 10
+HISTORY_MAX_MESSAGE_CHARS = 2000
+_HISTORY_ROLES = {"user", "assistant"}
+
+
+class HistoryTooLongError(ValueError):
+    """单条历史消息超长（api 映射 422 history_too_long）。"""
+
+
+def _parse_history(value) -> list[dict]:
+    """解析并归一化可选 history 字段；非法 → ValueError（api 映射 422）。
+
+    合同（S1-3 实施决策）：[{role: user|assistant, content}]；超条数截断取
+    最近 HISTORY_MAX_MESSAGES 条；单条超长/非法结构 → 422（明确拒绝，
+    不做静默截断——截断只用于条数，防内容被悄悄丢失）。
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("history 必须是数组")
+    normalized: list[dict] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("history 元素必须是对象")
+        role = entry.get("role")
+        content = entry.get("content")
+        if role not in _HISTORY_ROLES:
+            raise ValueError("history role 仅支持 user | assistant")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("history content 必须是非空字符串")
+        if len(content) > HISTORY_MAX_MESSAGE_CHARS:
+            raise HistoryTooLongError(
+                f"单条历史消息超过 {HISTORY_MAX_MESSAGE_CHARS} 字符上限"
+            )
+        normalized.append({"role": role, "content": content.strip()})
+    return normalized[-HISTORY_MAX_MESSAGES:]
+
 
 def create_qa_router(
     data_dir: Path,
@@ -65,7 +103,19 @@ def create_qa_router(
                 },
             )
         try:
-            return service.ask(body.get("question"))
+            history = _parse_history(body.get("history"))
+        except HistoryTooLongError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": {"code": "history_too_long", "message": str(exc)}},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": {"code": "invalid_history", "message": str(exc)}},
+            ) from exc
+        try:
+            return service.ask(body.get("question"), history=history)
         except QaError as exc:
             raise HTTPException(
                 status_code=_STATUS_MAP.get(type(exc), 500),

@@ -369,3 +369,62 @@ def test_qa_record_write_failure_does_not_block_answer(data_dir, caplog):
     assert any("qa_records" in r.message or "问答记录" in r.message for r in caplog.records), (
         "记录失败必须有告警日志（评估证据链路需可见）"
     )
+
+
+# ---------- S1-3 多轮上下文 ----------
+
+def test_build_prompt_includes_history_as_context_only():
+    """S1-3：历史注入 prompt（片段后、问题前），并明确仅作上下文参考。"""
+    snippets = [{"document_name": "周工作小结.docx", "snippet": "片段A", "page": 1}]
+    prompt = QaService._build_prompt(
+        "它花了多少钱？",
+        snippets,
+        history=[
+            {"role": "user", "content": "办公用品采购花了多少钱？"},
+            {"role": "assistant", "content": "答案是 3000 元。"},
+        ],
+    )
+    assert "办公用品采购花了多少钱？" in prompt
+    assert "答案是 3000 元。" in prompt
+    assert "它花了多少钱？" in prompt
+    # 历史定位：片段之后、当前问题之前
+    assert prompt.index("片段A") < prompt.index("办公用品采购花了多少钱？")
+    assert prompt.index("办公用品采购花了多少钱？") < prompt.index("它花了多少钱？")
+    # 诚实回答规则不变：历史仅作上下文参考，不作为事实来源
+    assert "不作为事实来源" in prompt
+
+
+def test_ask_with_history_injects_history_into_prompt(data_dir):
+    """S1-3：全链路——带 history 提问，chat prompt 含历史；检索不受历史影响。"""
+    _seed(data_dir)
+    captured = {}
+
+    def chat_capture(request: httpx.Request) -> httpx.Response:
+        captured["prompt"] = json.loads(request.content)["messages"][0]["content"]
+        return _chat_ok(request)
+
+    service = _make_service(data_dir, chat_handler=chat_capture)
+    result = service.ask(
+        "它花了多少钱？",
+        history=[
+            {"role": "user", "content": "办公用品采购花了多少钱？"},
+            {"role": "assistant", "content": "根据片段，答案是 3000 元。"},
+        ],
+    )
+    assert "办公用品采购花了多少钱？" in captured["prompt"]
+    assert "根据片段，答案是 3000 元。" in captured["prompt"]
+    assert result["answer"] == "根据片段，答案是 3000 元。"
+
+
+def test_ask_without_history_prompt_unchanged(data_dir):
+    """S1-3：无 history 向后兼容——prompt 不含历史段落，单轮语义不变。"""
+    _seed(data_dir)
+    captured = {}
+
+    def chat_capture(request: httpx.Request) -> httpx.Response:
+        captured["prompt"] = json.loads(request.content)["messages"][0]["content"]
+        return _chat_ok(request)
+
+    service = _make_service(data_dir, chat_handler=chat_capture)
+    service.ask("办公用品采购花了多少钱？")
+    assert "历史对话" not in captured["prompt"]

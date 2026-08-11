@@ -59,8 +59,18 @@ class QaService:
         self.data_dir = data_dir
         self.provider = provider
 
-    def ask(self, question: str, user_id: str = "default") -> dict:
-        """提问 → 带引用回答；成功返回 {answer, citations, provider}。"""
+    def ask(
+        self,
+        question: str,
+        user_id: str = "default",
+        history: list[dict] | None = None,
+    ) -> dict:
+        """提问 → 带引用回答；成功返回 {answer, citations, provider}。
+
+        S1-3：history 为前端携带的最近对话（[{role: user|assistant, content}]，
+        已由 api 层校验与截断，此处不再校验）；仅注入 prompt 作上下文参考，
+        检索仍基于当前问题（多轮检索增强属 LangGraph 演进项）。
+        """
         if not question or not question.strip():
             raise EmptyQuestionError("问题不能为空")
 
@@ -86,7 +96,7 @@ class QaService:
         provider_label = f"{cfg['provider']} · {cfg['model']}"
         citations, snippets = self._build_references(user_id, relevant_hits)
         if citations:
-            prompt = self._build_prompt(question.strip(), snippets)
+            prompt = self._build_prompt(question.strip(), snippets, history)
             try:
                 answer = self.provider.chat(user_id, prompt, max_tokens=1024)
             except ProviderError as exc:
@@ -164,16 +174,26 @@ class QaService:
             rows.append(row)
         return rows
 
-    # ---------- prompt 构造（编号片段 + 诚实回答指令） ----------
+    # ---------- prompt 构造（编号片段 + 历史上下文 + 诚实回答指令） ----------
 
     @staticmethod
-    def _build_prompt(question: str, snippets: list[dict]) -> str:
+    def _build_prompt(
+        question: str, snippets: list[dict], history: list[dict] | None = None
+    ) -> str:
         parts = ["你是基于知识库回答问题的助手。以下是检索到的相关内容片段：", ""]
         for i, s in enumerate(snippets, start=1):
             source = f"来源：{s['document_name']}"
             if s.get("page") is not None:
                 source += f"，第 {s['page']} 页"
             parts.append(f"[{i}]（{source}）\n{s['snippet']}")
+            parts.append("")
+        # S1-3：历史对话仅作上下文参考（理解指代），不作为事实来源——
+        # 诚实回答规则不变：事实必须来自检索片段。
+        if history:
+            parts += ["历史对话（仅供理解上下文与指代，不作为事实来源）：", ""]
+            for m in history:
+                who = "用户" if m["role"] == "user" else "助手"
+                parts.append(f"{who}：{m['content']}")
             parts.append("")
         parts += [
             f"请只基于以上片段回答问题：{question}",

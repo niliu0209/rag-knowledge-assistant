@@ -112,3 +112,59 @@ def test_qa_llm_failure_503(data_dir):
     )
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "llm_failed"
+
+
+# ---------- S1-3 多轮上下文 API 合同 ----------
+
+def test_qa_with_history_200(data_dir):
+    _seed(data_dir)
+    resp = _client(data_dir).post(
+        "/api/qa",
+        json={
+            "question": "它花了多少钱？",
+            "history": [
+                {"role": "user", "content": "办公用品采购花了多少钱？"},
+                {"role": "assistant", "content": "答案是 3000 元。"},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_qa_history_invalid_role_422(data_dir):
+    _seed(data_dir)
+    resp = _client(data_dir).post(
+        "/api/qa",
+        json={"question": "问题", "history": [{"role": "system", "content": "越权角色"}]},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "invalid_history"
+
+
+def test_qa_history_entry_too_long_422(data_dir):
+    _seed(data_dir)
+    resp = _client(data_dir).post(
+        "/api/qa",
+        json={"question": "问题", "history": [{"role": "user", "content": "x" * 2001}]},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "history_too_long"
+
+
+def test_qa_history_truncated_to_recent_10(data_dir):
+    """超 10 条截断取最近 10 条（服务端归一化，防 prompt 膨胀）。"""
+    _seed(data_dir)
+    captured = {}
+
+    def chat_capture(request: httpx.Request) -> httpx.Response:
+        captured["prompt"] = json.loads(request.content)["messages"][0]["content"]
+        return _chat_ok(request)
+
+    history = [{"role": "user", "content": f"历史问题 {i}"} for i in range(1, 16)]
+    resp = _client(data_dir, chat_handler=chat_capture).post(
+        "/api/qa", json={"question": "当前问题", "history": history}
+    )
+    assert resp.status_code == 200, resp.text
+    assert "历史问题 15" in captured["prompt"]  # 最近保留
+    assert "历史问题 6" in captured["prompt"]
+    assert "历史问题 5" not in captured["prompt"]  # 前 5 条丢弃
