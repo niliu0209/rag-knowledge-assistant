@@ -152,3 +152,97 @@ def test_delete_failure_rolls_back_record(data_dir, tmp_path, monkeypatch):
     # 回滚：SQLite 记录还在（列表可见），文件未删，一致状态
     assert [d["id"] for d in client.get("/api/documents").json()] == [doc["id"]]
     assert len(_chroma_doc_ids(data_dir, doc["id"])) >= 1
+
+
+# ---------- 批量删除（S1-4） ----------
+
+def test_batch_delete_success_no_residue(data_dir, tmp_path):
+    """批量删除后：SQLite 记录、Chroma 切片、上传文件均无残留；未删文档不受影响。"""
+    client = _client(data_dir)
+    docs = [_upload(client, make_docx(tmp_path / f"批量{i}.docx")) for i in range(3)]
+    target = docs[:2]
+
+    resp = client.post(
+        "/api/documents/batch-delete", json={"doc_ids": [d["id"] for d in target]}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": 2}
+
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "rag.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    for d in target:
+        assert _chroma_doc_ids(data_dir, d["id"]) == []
+    uploads = list((data_dir / "uploads").iterdir()) if (data_dir / "uploads").exists() else []
+    assert len(uploads) == 1
+    remain = client.get("/api/documents").json()
+    assert [d["id"] for d in remain] == [docs[2]["id"]]
+    assert len(_chroma_doc_ids(data_dir, docs[2]["id"])) >= 1  # 未删文档检索不受影响
+
+
+def test_batch_delete_missing_id_404_nothing_deleted(data_dir, tmp_path):
+    """全有或全无：任一 id 不存在 → 404，且不执行任何删除。"""
+    client = _client(data_dir)
+    doc = _upload(client, make_docx(tmp_path / "唯一.docx"))
+
+    resp = client.post(
+        "/api/documents/batch-delete", json={"doc_ids": [doc["id"], "no-such-id"]}
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "document_not_found"
+    assert [d["id"] for d in client.get("/api/documents").json()] == [doc["id"]]
+    assert len(_chroma_doc_ids(data_dir, doc["id"])) >= 1
+
+
+def test_batch_delete_empty_or_invalid_422(data_dir):
+    """结构校验：非数组 / 空数组 / 非字符串元素 → 422，不执行任何删除。"""
+    client = _client(data_dir)
+    for payload in ([], "not-a-list", {"doc_ids": []}, {"doc_ids": [123]}):
+        resp = client.post("/api/documents/batch-delete", json=payload)
+        assert resp.status_code == 422, payload
+
+
+def test_batch_delete_over_cap_422(data_dir):
+    """一次批量删除上限 100 条（去重后）；超限 422 且不执行。"""
+    client = _client(data_dir)
+    resp = client.post(
+        "/api/documents/batch-delete",
+        json={"doc_ids": [f"id-{i}" for i in range(101)]},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "batch_too_large"
+
+
+def test_batch_delete_dedup(data_dir, tmp_path):
+    """重复 id 去重后一次删除成功。"""
+    client = _client(data_dir)
+    doc = _upload(client, make_docx(tmp_path / "去重.docx"))
+    resp = client.post(
+        "/api/documents/batch-delete", json={"doc_ids": [doc["id"], doc["id"]]}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": 1}
+    assert client.get("/api/documents").json() == []
+
+
+def test_batch_delete_partial_failure_rolls_back_all(data_dir, tmp_path, monkeypatch):
+    """任一文档 Chroma 删除失败 → 全部回滚（列表仍可见全部），500 明确提示。"""
+    import app.data.chroma_store as chroma_store
+
+    client = _client(data_dir)
+    docs = [_upload(client, make_docx(tmp_path / f"回滚{i}.docx")) for i in range(2)]
+
+    def boom(collection, doc_id):
+        raise RuntimeError("chroma 模拟故障")
+
+    monkeypatch.setattr(chroma_store, "delete_by_doc_id", boom)
+    resp = client.post(
+        "/api/documents/batch-delete", json={"doc_ids": [d["id"] for d in docs]}
+    )
+    assert resp.status_code == 500
+    assert resp.json()["error"]["code"] == "document_delete_failed"
+    listed = {d["id"] for d in client.get("/api/documents").json()}
+    assert listed == {d["id"] for d in docs}  # 全部回滚，无一缺失
+    for d in docs:
+        assert len(_chroma_doc_ids(data_dir, d["id"])) >= 1

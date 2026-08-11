@@ -265,6 +265,61 @@ class DocumentIngestService:
             logger.warning("上传文件删除失败（doc_id=%s）: %s", doc_id, exc)
         logger.info("文档删除成功: %s（doc_id=%s）", row["name"], doc_id)
 
+    def delete_documents(self, doc_ids: list[str], user_id: str = USER_ID) -> int:
+        """批量删除（S1-4）：全有或全无——任一 id 不存在 → DocumentNotFoundError
+        且不执行任何删除；任一 Chroma 删除失败 → 全部 SQLite 记录重插回滚。
+        返回删除数量。
+
+        顺序与补偿复用单删模式：先一次事务删全部 SQLite（失败无副作用）→
+        逐个删 Chroma（任一失败全量回滚，抛 DocumentDeleteError）→
+        文件逐个删（失败仅磁盘残留，日志警告不阻断——本地单机文件系统）。
+        """
+        with get_connection(self.data_dir) as conn:
+            rows = []
+            for doc_id in doc_ids:
+                row = document_store.get_document(conn, doc_id, user_id)
+                if row is None:
+                    raise DocumentNotFoundError(
+                        "批量删除包含不存在的文档，未执行任何删除"
+                    )
+                rows.append(row)
+        rows_by_id = {r["id"]: r for r in rows}
+
+        try:
+            with get_connection(self.data_dir) as conn:
+                for doc_id in doc_ids:
+                    document_store.delete_document(conn, doc_id)
+            collection = chroma_store.get_collection(self.data_dir)
+            for doc_id in doc_ids:
+                chroma_store.delete_by_doc_id(collection, doc_id)
+        except Exception as exc:  # noqa: BLE001——删除失败走补偿回滚（F0-2 验收）
+            logger.exception("批量删除失败（%d 个文档），补偿回滚", len(doc_ids))
+            try:
+                with get_connection(self.data_dir) as conn:
+                    for doc_id in doc_ids:
+                        row = rows_by_id[doc_id]
+                        if document_store.get_document(conn, doc_id, user_id) is None:
+                            document_store.insert_document(
+                                conn,
+                                user_id=row["user_id"],
+                                doc_id=row["id"],
+                                name=row["name"],
+                                category=row["category"],
+                                file_path=row["file_path"],
+                                status=row["status"],
+                            )
+            except Exception:  # noqa: BLE001——补偿尽力而为
+                logger.exception("批量删除补偿回滚失败（%d 个文档）", len(doc_ids))
+            raise DocumentDeleteError("批量删除失败，数据已回滚，请重试") from exc
+
+        for doc_id in doc_ids:
+            try:
+                Path(rows_by_id[doc_id]["file_path"]).unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("上传文件删除失败（doc_id=%s）: %s", doc_id, exc)
+        logger.info("批量删除成功：%d 个文档（user_id=%s）", len(doc_ids), user_id)
+        return len(doc_ids)
+
     def _validate(self, filename: str, content: bytes, category: str) -> str:
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if ext not in ALLOWED_EXTENSIONS:

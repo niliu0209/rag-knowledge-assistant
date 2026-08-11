@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 from app.services.ingest import (
     DocumentDeleteError,
@@ -86,6 +86,65 @@ def create_documents_router(
                 detail={"error": {"code": _code_of(exc), "message": str(exc)}},
             ) from exc
         return {"ok": True}
+
+    # S1-4 批量删除：一次删除多份文档（全有或全无，见 service.delete_documents）
+    # 校验顺序：结构（非数组/空/元素类型）→ 去重 → 上限（去重后 ≤100）→ 存在性（404 不执行）
+    BATCH_DELETE_MAX = 100
+
+    @router.post("/api/documents/batch-delete")
+    async def batch_delete(request: Request):
+        try:
+            body = await request.json()
+        except Exception as exc:  # noqa: BLE001——JSON 解析失败返回统一错误体
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {"code": "invalid_json", "message": "请求体不是合法 JSON"}
+                },
+            ) from exc
+        doc_ids = body.get("doc_ids") if isinstance(body, dict) else None
+        if not isinstance(doc_ids, list) or not doc_ids:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": {
+                        "code": "invalid_batch",
+                        "message": "doc_ids 必须是包含 1 个以上 id 的数组",
+                    }
+                },
+            )
+        seen: list[str] = []
+        for item in doc_ids:
+            if not isinstance(item, str) or not item.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": {
+                            "code": "invalid_batch",
+                            "message": "doc_ids 元素必须是非空字符串",
+                        }
+                    },
+                )
+            if item not in seen:
+                seen.append(item)
+        if len(seen) > BATCH_DELETE_MAX:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": {
+                        "code": "batch_too_large",
+                        "message": f"一次批量删除最多 {BATCH_DELETE_MAX} 份文档",
+                    }
+                },
+            )
+        try:
+            deleted = service.delete_documents(seen)
+        except IngestError as exc:
+            raise HTTPException(
+                status_code=_STATUS_MAP.get(type(exc), 500),
+                detail={"error": {"code": _code_of(exc), "message": str(exc)}},
+            ) from exc
+        return {"deleted": deleted}
 
     return router
 

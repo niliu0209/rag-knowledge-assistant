@@ -71,7 +71,11 @@ def render(api_url: str) -> None:
                 else "输入 Key（免费预设同样需要）"
             ),
         )
-        st.caption("Key 仅保存在本机数据库，不会写入日志或明文回显。")
+        st.caption("Key 仅保存在本机数据库（加密存储），不会写入日志或明文回显。")
+        st.caption(
+            "主密钥 RAG_KEY_ENCRYPTION_KEY 请妥善保管：丢失或被替换后，已保存的 Key "
+            "将无法解密（须重新输入）；未配置时密钥文件在 data/secrets/rag_key.bin。"
+        )
 
         col_save, col_validate = st.columns(2)
         save_clicked = col_save.form_submit_button("保存并校验连通", type="primary")

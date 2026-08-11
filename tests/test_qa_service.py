@@ -428,3 +428,37 @@ def test_ask_without_history_prompt_unchanged(data_dir):
     service = _make_service(data_dir, chat_handler=chat_capture)
     service.ask("办公用品采购花了多少钱？")
     assert "历史对话" not in captured["prompt"]
+
+
+def test_relevance_threshold_recalibrated_1025(data_dir):
+    """S1-4 重校准：阈值 0.98 → 1.025——distance 1.02 的变体命中保留，1.03 无关过滤。
+
+    构造与查询向量 [1,0,0,0] 距离精确等于 1.02（0.98 误伤带）与 1.03（无关带）的
+    片段向量，断言 1.02 片段进引用、1.03 片段被过滤且快照 relevant 标记正确。
+    """
+    import math
+
+    # Chroma 距离 = 归一化后平方 L2（= 2(1-cos)）：构造 cos 使距离恰为目标值
+    def vec_for(distance):
+        x = 1 - distance / 2  # cos；2(1-x) = distance
+        y = math.sqrt(1 - x**2)
+        return [x, y, 0.0, 0.0]
+
+    doc_id = _seed(
+        data_dir,
+        chunks=[
+            (DOC_TEXT, [1.0, 0.0, 0.0, 0.0], 1),  # d=0 命中
+            ("变体命中片段", vec_for(1.02), 2),  # d≈1.020 旧阈值误伤带 → 1.025 保留
+            ("无关片段", vec_for(1.03), 3),  # d≈1.030 无关带 → 过滤
+        ],
+    )
+    result = _make_service(data_dir).ask("办公用品采购花了多少钱？")
+
+    cited = {c["chunk_index"] for c in result["citations"]}
+    assert cited == {0, 1}, f"1.02 变体片段必须保留，实际引用 {cited}"
+    assert len(result["citations"]) == 2
+
+    chunks = json.loads(_qa_records(data_dir)[0]["retrieved_chunks"])
+    by_index = {c["chunk_index"]: c for c in chunks}
+    assert by_index[1]["relevant"] is True and abs(by_index[1]["distance"] - 1.02) < 1e-3
+    assert by_index[2]["relevant"] is False and abs(by_index[2]["distance"] - 1.03) < 1e-3

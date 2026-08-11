@@ -46,6 +46,42 @@ def render(api_url: str) -> None:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
     st.divider()
+    st.markdown("### 批量删除")
+    # 多选 + 批量删除（S1-4）：checkbox 多选，一次删除（全有或全无，服务端保证）
+    picked = []
+    for d in docs:
+        if st.checkbox(d["name"], key=f"bdel-{d['id']}"):
+            picked.append(d["name"])
+    if not picked:
+        st.caption("勾选要删除的文档（可多选）")
+    batch_confirm = st.checkbox(
+        "我确认删除选中文档及其全部切片与向量（不可恢复）",
+        disabled=not picked,
+        key="bdel-confirm",
+    )
+    if st.button(
+        "批量删除选中",
+        type="primary",
+        disabled=not (picked and batch_confirm),
+    ):
+        selected_ids = [d["id"] for d in docs if d["name"] in picked]
+        try:
+            resp = httpx.post(
+                f"{api_url}/api/documents/batch-delete",
+                json={"doc_ids": selected_ids},
+                timeout=60.0,
+            )
+            body = resp.json()
+        except httpx.HTTPError as exc:
+            st.error(f"删除请求失败：{exc}")
+            return
+        if resp.status_code == 200:
+            st.session_state["list_success"] = f"已批量删除 {body.get('deleted', len(picked))} 份文档"
+            st.rerun()
+        else:
+            st.error(body.get("error", {}).get("message", "删除失败，请稍后重试"))
+
+    st.divider()
     st.markdown("### 删除文档")
     options = {d["name"]: d["id"] for d in docs}
     target = st.selectbox("选择要删除的文档", options=list(options.keys()))
