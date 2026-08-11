@@ -17,5 +17,5 @@ RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" . \
 
 EXPOSE 8000 8501
 
-# 默认启动 API；ui 容器由 compose 覆盖 command
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 默认启动 API（--factory：避免 import 模块级副作用）；ui 容器由 compose 覆盖 command
+CMD ["uvicorn", "--factory", "app.main:create_app", "--host", "0.0.0.0", "--port", "8000"]

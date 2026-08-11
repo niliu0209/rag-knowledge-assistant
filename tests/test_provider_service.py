@@ -58,6 +58,57 @@ def test_save_then_masked_read(data_dir):
     assert cfg["key_masked"] == "sk-****7890"
 
 
+def test_api_key_encrypted_at_rest(data_dir):
+    """S1-2：库中 api_key 字段无明文，密文带 enc$v1$ 前缀。"""
+    svc = _service(data_dir)
+    svc.save_config("default", mode="preset", provider="siliconflow",
+                    model="m", embedding_model="e",
+                    api_key="sk-secret-1234567890", base_url=None)
+    conn = sqlite3.connect(data_dir / "rag.db")
+    try:
+        row = conn.execute(
+            "SELECT api_key FROM provider_settings WHERE user_id = 'default'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row[0].startswith("enc$v1$")
+    assert "sk-secret-1234567890" not in row[0]
+
+
+def test_saved_key_decrypts_in_full_config(data_dir):
+    """S1-2：解密仅服务端内部读取路径（get_full_config），明文不落库。"""
+    svc = _service(data_dir)
+    svc.save_config("default", mode="preset", provider="siliconflow",
+                    model="m", embedding_model="e",
+                    api_key="sk-secret-1234567890", base_url=None)
+    cfg = svc.get_full_config("default")
+    assert cfg["api_key"] == "sk-secret-1234567890"
+
+
+def test_resave_overwrites_and_still_decrypts(data_dir):
+    """S1-2：覆盖保存（PUT 保留 Key 场景）幂等——旧密文被替换，新 Key 可解。"""
+    svc = _service(data_dir)
+    svc.save_config("default", mode="preset", provider="siliconflow",
+                    model="m1", embedding_model="e1",
+                    api_key="key-one-1234567890", base_url=None)
+    svc.save_config("default", mode="preset", provider="siliconflow",
+                    model="m2", embedding_model="e2",
+                    api_key="key-two-1234567890", base_url=None)
+    cfg = svc.get_full_config("default")
+    assert cfg["api_key"] == "key-two-1234567890"
+    assert cfg["model"] == "m2"
+
+
+def test_none_key_stored_as_null(data_dir):
+    """S1-2：无 Key（预设回落）不加密、不产生密文噪音。"""
+    svc = _service(data_dir)
+    svc.save_config("default", mode="preset", provider="siliconflow",
+                    model="m", embedding_model="e",
+                    api_key=None, base_url=None)
+    cfg = svc.get_full_config("default")
+    assert cfg["api_key"] is None
+
+
 def test_chat_success_with_retry_on_429(data_dir):
     calls = []
 

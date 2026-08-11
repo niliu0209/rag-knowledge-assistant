@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     ui_port: int = 8501
     api_url: str = "http://localhost:8000"
     log_level: str = "INFO"
+    # S1-2 Key 加密存储主密钥（Fernet key，env 注入优先；未注入自动生成持久化）
+    key_encryption_key: str | None = None
 
 
 @lru_cache

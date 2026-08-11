@@ -1,6 +1,9 @@
 """ProviderService：提供商清单与预设、Key 生命周期与掩码、embedding 一致性、
 超时/429 退避重试（owner 合同见 architecture.md 模块表；不拥有文档业务规则）。
 
+S1-2 起 Key 加密存储（owner：Key 生命周期）：写入加密、读取解密，
+密文不进响应/日志/错误体；解密仅服务端调用前。
+
 外部 API 全部走 OpenAI 兼容协议（/chat/completions、/embeddings）；真实调用只
 在验收阶段执行，自动化测试注入 httpx transport（行为保持 fake，不消耗额度）。
 """
@@ -14,7 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from cryptography.fernet import InvalidToken
 
+from app.core.config import get_settings
+from app.core.crypto import decrypt_text, encrypt_text, get_fernet
 from app.data.provider_store import (
     get_provider_settings,
     upsert_provider_settings,
@@ -95,13 +101,29 @@ class ProviderService:
         transport: httpx.BaseTransport | None = None,
         retry_base_delay: float = 1.0,
         request_timeout: float = 60.0,
+        key_encryption_key: str | None = None,
     ) -> None:
         self.data_dir = data_dir
         self._transport = transport
         self.retry_base_delay = retry_base_delay
         self.request_timeout = request_timeout
+        # S1-2：主密钥解析（显式参数优先 → settings env → 持久化密钥文件）。
+        # 无效注入值在构造即抛错，防"存得进解不开"。
+        self._fernet = get_fernet(
+            data_dir, key_encryption_key or get_settings().key_encryption_key
+        )
 
     # ---------- 配置读写 ----------
+
+    def _decrypt_key(self, token: str | None) -> str | None:
+        """服务端内部解密已存 Key；密文损坏/主密钥不匹配 → 友好错误。"""
+        try:
+            return decrypt_text(self._fernet, token)
+        except InvalidToken as exc:
+            raise ProviderError(
+                "已存 API Key 无法解密（主密钥不匹配或数据损坏），"
+                "请检查 RAG_KEY_ENCRYPTION_KEY 配置或重新保存 Key"
+            ) from exc
 
     def get_config(self, user_id: str) -> dict[str, Any]:
         """当前生效配置（含掩码 Key）；无存储记录时返回默认预设。"""
@@ -120,7 +142,7 @@ class ProviderService:
             "provider": row["provider"],
             "model": row["model"],
             "embedding_model": row["embedding_model"],
-            "key_masked": mask_api_key(row["api_key"]),
+            "key_masked": mask_api_key(self._decrypt_key(row["api_key"])),
         }
 
     def save_config(
@@ -133,7 +155,10 @@ class ProviderService:
         api_key: str | None,
         base_url: str | None,
     ) -> None:
-        """保存配置；base_url 按 mode/provider 解析为完整地址后落库。"""
+        """保存配置；base_url 按 mode/provider 解析为完整地址后落库。
+
+        S1-2：api_key 加密后落库（Key 生命周期 owner），库中无明文。
+        """
         resolved = self._resolve_base_url(mode, provider, base_url)
         with sqlite3.connect(self.data_dir / "rag.db") as conn:
             upsert_provider_settings(
@@ -143,7 +168,7 @@ class ProviderService:
                 provider=provider,
                 model=model,
                 embedding_model=embedding_model,
-                api_key=api_key,
+                api_key=encrypt_text(self._fernet, api_key),
                 base_url=resolved,
             )
 
@@ -151,6 +176,7 @@ class ProviderService:
         """读取存储完整配置（含 api_key/base_url）；无记录返回默认预设。
 
         仅供服务端内部使用（保存/调用前取值），不得直接进响应或日志。
+        S1-2：读取路径解密（解密仅服务端调用前）。
         """
         with sqlite3.connect(self.data_dir / "rag.db") as conn:
             row = get_provider_settings(conn, user_id)
@@ -163,7 +189,7 @@ class ProviderService:
                 "api_key": None,
                 "base_url": DEFAULT_PRESET["base_url"],
             }
-        return row
+        return {**row, "api_key": self._decrypt_key(row["api_key"])}
 
     # ---------- 配置校验 ----------
 

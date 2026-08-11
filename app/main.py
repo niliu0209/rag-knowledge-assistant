@@ -2,10 +2,15 @@
 
 启动时初始化数据目录并应用 schema 迁移；create_app 可注入数据目录与
 provider transport（测试隔离与外部边界 fake）。
+
+启动方式：uvicorn --factory app.main:create_app（工厂模式，避免模块级
+副作用——import 即迁移会污染测试隔离与误生成密钥文件）。
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 
 import httpx
@@ -19,6 +24,7 @@ from app.api.routes.health import create_health_router
 from app.api.routes.providers import create_providers_router
 from app.api.routes.qa import create_qa_router
 from app.core.config import get_settings
+from app.core.crypto import encrypt_text, get_fernet
 from app.data.db import get_connection
 from app.data.migrations import apply_migrations
 
@@ -27,10 +33,20 @@ def create_app(
     data_dir: Path | None = None,
     provider_transport: httpx.BaseTransport | None = None,
 ) -> FastAPI:
-    data_dir = data_dir or get_settings().data_dir
+    settings = get_settings()
+    data_dir = data_dir or settings.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
     with get_connection(data_dir) as conn:
-        apply_migrations(conn)
+        apply_migrations(
+            conn,
+            # S1-2：v003 明文 Key 迁移加密（主密钥 env 注入优先，否则持久化密钥文件）
+            legacy_encryptor=partial(
+                encrypt_text, get_fernet(data_dir, settings.key_encryption_key)
+            ),
+            # 回滚路径：v003 转换前备份原库（含迁移前明文，按敏感数据保管）
+            backup_path=data_dir
+            / f"rag.db.pre-v003-{datetime.now(timezone.utc):%Y%m%d%H%M%S}.bak",
+        )
 
     app = FastAPI(title="rag-knowledge-assistant", version=__version__)
 
@@ -51,7 +67,3 @@ def create_app(
         create_qa_router(data_dir, provider_transport=provider_transport)
     )
     return app
-
-
-# uvicorn app.main:app 入口
-app = create_app()

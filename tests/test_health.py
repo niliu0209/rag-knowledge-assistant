@@ -6,7 +6,7 @@ from app.main import create_app
 
 
 def test_health_returns_ok(data_dir):
-    client = TestClient(create_app())
+    client = TestClient(create_app(data_dir=data_dir))
     resp = client.get("/api/health")
 
     assert resp.status_code == 200
@@ -24,7 +24,7 @@ def test_health_fails_when_data_dir_unwritable(data_dir, monkeypatch):
     import app.api.routes.health as health_module
 
     monkeypatch.setattr(health_module, "check_ready", _blocked)
-    client = TestClient(create_app())
+    client = TestClient(create_app(data_dir=data_dir))
     resp = client.get("/api/health")
 
     assert resp.status_code == 503

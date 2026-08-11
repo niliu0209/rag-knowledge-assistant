@@ -9,6 +9,8 @@ services:
       DATA_DIR: /data
       API_HOST: 0.0.0.0
       API_PORT: "8000"
+      # S1-2 Key 加密主密钥（可选：注入则密钥与数据分离；未注入自动生成到 /data/secrets/）
+      RAG_KEY_ENCRYPTION_KEY: ${RAG_KEY_ENCRYPTION_KEY:-}
     volumes:
       - rag-data:/data
     healthcheck:
