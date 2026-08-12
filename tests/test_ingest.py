@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 import httpx
 import pytest
@@ -39,7 +40,14 @@ def _embed_fail_handler(request: httpx.Request) -> httpx.Response:
 
 def _client(data_dir, handler=_embed_ok_handler):
     app = create_app(data_dir=data_dir, provider_transport=httpx.MockTransport(handler))
-    return TestClient(app)
+    c = TestClient(app)
+    # S2-1 认证合同：以首启 admin 身份注册并登录
+    resp = c.post(
+        "/api/auth/register",
+        json={"username": "admin", "password": "Passw0rd!@#"},
+    )
+    assert resp.status_code == 200, resp.text
+    return c
 
 
 def _upload(client, path, category="业务报告", filename=None):
@@ -80,7 +88,8 @@ def test_upload_docx_success_ready_and_chunks(data_dir, tmp_path):
     with sqlite3.connect(data_dir / "rag.db") as conn:
         row = conn.execute("SELECT * FROM documents").fetchone()
         assert row is not None
-        assert row[1] == "default"  # user_id（id/user_id/name/category/file_path/...）
+        # S2-1 认证合同：user_id 为当前登录用户 id（UUID），不再是 'default'
+        assert uuid.UUID(row[1])
         assert row[2] == "周工作小结.docx"
         assert row[3] == "业务报告"
         assert row[7] == "ready"
@@ -89,7 +98,8 @@ def test_upload_docx_success_ready_and_chunks(data_dir, tmp_path):
     got = _chroma_rows(data_dir)
     assert len(got["ids"]) >= 1
     meta = got["metadatas"][0]
-    assert meta["user_id"] == "default"
+    # S2-1 认证合同：切片 user_id 为当前登录用户 id（UUID），不再是 'default'
+    assert uuid.UUID(meta["user_id"])
     assert meta["doc_id"] == body["id"]
     assert meta["category"] == "业务报告"
     assert meta["chunk_index"] == 0

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # S1-2 Key 加密存储主密钥（Fernet key，env 注入优先；未注入自动生成持久化）
     key_encryption_key: str | None = None
+    # S2-1 会话 cookie Secure 标志：本机 HTTP False；S2-3 公开部署 HTTPS 时置 True
+    cookie_secure: bool = False
 
 
 @lru_cache

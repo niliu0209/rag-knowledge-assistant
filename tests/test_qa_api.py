@@ -47,7 +47,14 @@ def _client(data_dir, chat_handler=_chat_ok):
     app = create_app(
         data_dir=data_dir, provider_transport=_transport(chat_handler)
     )
-    return TestClient(app)
+    c = TestClient(app)
+    # S2-1 认证合同：以首启 admin 身份注册并登录
+    resp = c.post(
+        "/api/auth/register",
+        json={"username": "admin", "password": "Passw0rd!@#"},
+    )
+    assert resp.status_code == 200, resp.text
+    return c
 
 
 def test_qa_ok_200(data_dir):

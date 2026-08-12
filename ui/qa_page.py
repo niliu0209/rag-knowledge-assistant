@@ -11,6 +11,8 @@ from __future__ import annotations
 import httpx
 import streamlit as st
 
+from ui.http import get_client, handle_unauthorized
+
 # 携带历史上限：与服务端归一化一致（最近 10 条，服务端兜底截断）
 HISTORY_MAX_MESSAGES = 10
 
@@ -29,7 +31,11 @@ def render(api_url: str) -> None:
 
     # 知识库为空时引导（不阻塞提问，用户可直接看到错误信息）
     try:
-        docs = httpx.get(f"{api_url}/api/documents", timeout=10.0).json()
+        resp = get_client(api_url).get("/api/documents", timeout=10.0)
+        if resp.status_code == 401:
+            handle_unauthorized(api_url)
+            return
+        docs = resp.json()
     except httpx.HTTPError:
         docs = []
     if not docs:
@@ -57,8 +63,8 @@ def render(api_url: str) -> None:
 
     with st.spinner("检索知识库并生成回答…"):
         try:
-            resp = httpx.post(
-                f"{api_url}/api/qa",
+            resp = get_client(api_url).post(
+                "/api/qa",
                 json={"question": question, "history": history},
                 timeout=120.0,
             )
@@ -66,6 +72,10 @@ def render(api_url: str) -> None:
         except httpx.HTTPError as exc:
             st.error(f"提问失败：{exc}")
             return
+
+    if resp.status_code == 401:
+        handle_unauthorized(api_url)
+        return
 
     if resp.status_code != 200:
         st.error(body.get("error", {}).get("message", "提问失败，请稍后重试"))

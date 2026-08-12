@@ -11,9 +11,17 @@ from app.main import create_app
 from app.services.provider import DEFAULT_PRESET
 
 
-def _client(data_dir, transport=None):
+def _client(data_dir, transport=None, register: bool = True):
     app = create_app(data_dir=data_dir, provider_transport=transport)
-    return TestClient(app)
+    c = TestClient(app)
+    if register:
+        # S2-1 认证合同：以首启 admin 身份注册并登录（register=False 供复用会话场景）
+        resp = c.post(
+            "/api/auth/register",
+            json={"username": "admin", "password": "Passw0rd!@#"},
+        )
+        assert resp.status_code == 200, resp.text
+    return c
 
 
 def test_get_providers_default(data_dir):
@@ -107,12 +115,16 @@ def test_validate_endpoint(data_dir):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
 
+    # 第二个客户端复用 admin 会话（邀请制下不可二次注册；会话 cookie 跨实例复制）
     bad_client = _client(
         data_dir,
         transport=httpx.MockTransport(
             lambda req: httpx.Response(401, json={"error": {"message": "bad"}})
         ),
+        register=False,
     )
+    bad_client.cookies.clear()
+    bad_client.cookies.set("session", ok_client.cookies.get("session"))
     resp = bad_client.post("/api/provider/validate", json={
         "mode": "preset", "provider": "siliconflow",
         "model": "Qwen/Qwen2.5-7B-Instruct",

@@ -117,6 +117,44 @@ MIGRATIONS: list[tuple[str, list[Any]]] = [
             _encrypt_plaintext_keys,
         ],
     ),
+    (
+        "v004",
+        [
+            # S2-1 认证与用户管理：users/sessions/invite_codes（architecture.md
+            # 阶段 2 规划数据节）。user_id 维度已在 v001 就位，无需改既有表。
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,              -- UUID
+                username TEXT NOT NULL UNIQUE,     -- 登录名（服务端白名单校验）
+                password_hash TEXT NOT NULL,       -- Argon2id（argon2-cffi）
+                role TEXT NOT NULL DEFAULT 'user', -- admin | user（admin=项目作者）
+                status TEXT NOT NULL DEFAULT 'active',  -- active | disabled（停用即时生效）
+                invite_code TEXT,                  -- 注册所用邀请码（首启 admin 为 NULL）
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,              -- UUID，即会话 cookie 值
+                user_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at TEXT NOT NULL,         -- ISO UTC；过期会话拒绝
+                revoked_at TEXT                   -- 登出/停用置位，非 NULL 即失效
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)",
+            """
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                code TEXT PRIMARY KEY,            -- 邀请码（注册凭证，仅 admin 可生成）
+                created_by TEXT NOT NULL,         -- 生成者 user_id
+                used_by TEXT,                     -- 使用人 user_id（未用为 NULL）
+                used_at TEXT,
+                revoked_at TEXT,                  -- 撤销（撤回后不可用）
+                expires_at TEXT                   -- 过期时间（NULL=永不过期）
+            )
+            """,
+        ],
+    ),
 ]
 
 

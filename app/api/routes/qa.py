@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api.deps import get_current_user
 from app.services.provider import ProviderService
 from app.services.qa import (
     EmptyQuestionError,
@@ -81,7 +82,9 @@ def create_qa_router(
         service = QaService(data_dir, provider)
 
     @router.post("/api/qa")
-    async def ask_question(request: Request):
+    async def ask_question(
+        request: Request, user: dict = Depends(get_current_user)
+    ):
         # 手动解析 JSON：保证非法请求体也返回统一错误体（pydantic 默认 422 格式不统一）
         try:
             body = await request.json()
@@ -115,7 +118,9 @@ def create_qa_router(
                 detail={"error": {"code": "invalid_history", "message": str(exc)}},
             ) from exc
         try:
-            return service.ask(body.get("question"), history=history)
+            return service.ask(
+                body.get("question"), user_id=user["id"], history=history
+            )
         except QaError as exc:
             raise HTTPException(
                 status_code=_STATUS_MAP.get(type(exc), 500),

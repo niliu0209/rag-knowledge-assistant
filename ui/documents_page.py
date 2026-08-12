@@ -8,6 +8,8 @@ from __future__ import annotations
 import httpx
 import streamlit as st
 
+from ui.http import get_client, handle_unauthorized
+
 
 def render(api_url: str) -> None:
     st.subheader("文档列表")
@@ -17,12 +19,16 @@ def render(api_url: str) -> None:
     if msg:
         st.success(msg)
 
+    client = get_client(api_url)
     try:
-        resp = httpx.get(f"{api_url}/api/documents", timeout=10.0)
+        resp = client.get("/api/documents", timeout=10.0)
         resp.raise_for_status()
         docs = resp.json()
     except httpx.HTTPError as exc:
         st.error(f"无法加载文档列表：{exc}")
+        return
+    if resp.status_code == 401:
+        handle_unauthorized(api_url)
         return
 
     if not docs:
@@ -66,14 +72,17 @@ def render(api_url: str) -> None:
     ):
         selected_ids = [d["id"] for d in docs if d["name"] in picked]
         try:
-            resp = httpx.post(
-                f"{api_url}/api/documents/batch-delete",
+            resp = client.post(
+                "/api/documents/batch-delete",
                 json={"doc_ids": selected_ids},
                 timeout=60.0,
             )
             body = resp.json()
         except httpx.HTTPError as exc:
             st.error(f"删除请求失败：{exc}")
+            return
+        if resp.status_code == 401:
+            handle_unauthorized(api_url)
             return
         if resp.status_code == 200:
             st.session_state["list_success"] = f"已批量删除 {body.get('deleted', len(picked))} 份文档"
@@ -88,12 +97,15 @@ def render(api_url: str) -> None:
     confirm = st.checkbox("我确认删除该文档及其全部切片与向量（不可恢复）")
     if st.button("删除", type="primary", disabled=not confirm):
         try:
-            resp = httpx.delete(
-                f"{api_url}/api/documents/{options[target]}", timeout=30.0
+            resp = client.delete(
+                f"/api/documents/{options[target]}", timeout=30.0
             )
             body = resp.json()
         except httpx.HTTPError as exc:
             st.error(f"删除请求失败：{exc}")
+            return
+        if resp.status_code == 401:
+            handle_unauthorized(api_url)
             return
         if resp.status_code == 200:
             st.session_state["list_success"] = f"已删除「{target}」"

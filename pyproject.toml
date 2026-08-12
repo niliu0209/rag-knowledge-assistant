@@ -12,6 +12,8 @@ dependencies = [
     "chromadb>=0.6",
     # Key 加密存储（S1-2）：Fernet 对称加密（cryptography 事实标准）
     "cryptography>=42",
+    # 密码哈希（S2-1）：Argon2id（OWASP 现行推荐，抗 GPU 破解；argon2-cffi 事实标准实现）
+    "argon2-cffi>=23.1",
     # LlamaIndex 数据层（选型定案：解析/切片原语；S2 起引入）
     "llama-index-core>=0.14",
     "llama-index-readers-file>=0.6",

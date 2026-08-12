@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.api.deps import get_current_user
 from app.services.provider import (
     PRESETS,
     InvalidConfigError,
@@ -44,12 +45,12 @@ def create_providers_router(
         service = ProviderService(data_dir, transport=provider_transport)
 
     @router.get("/api/providers")
-    def list_providers():
-        return {"presets": PRESETS, "current": service.get_config("default")}
+    def list_providers(user: dict = Depends(get_current_user)):
+        return {"presets": PRESETS, "current": service.get_config(user["id"])}
 
     @router.put("/api/provider")
-    def put_provider(req: ProviderPutRequest):
-        current = service.get_full_config("default")
+    def put_provider(req: ProviderPutRequest, user: dict = Depends(get_current_user)):
+        current = service.get_full_config(user["id"])
         model = req.model or current["model"]
         embedding_model = req.embedding_model or current["embedding_model"]
         # 未传 Key 时保留已存 Key（避免覆盖清空）
@@ -59,7 +60,7 @@ def create_providers_router(
                 req.mode, req.provider, model, embedding_model, api_key, req.base_url
             )
             ok, message = service.validate_connectivity(
-                "default",
+                user["id"],
                 mode=req.mode,
                 provider=req.provider,
                 model=model,
@@ -91,7 +92,7 @@ def create_providers_router(
             )
 
         service.save_config(
-            "default",
+            user["id"],
             mode=req.mode,
             provider=req.provider,
             model=model,
@@ -102,13 +103,15 @@ def create_providers_router(
         return {"ok": True}
 
     @router.post("/api/provider/validate")
-    def validate_provider(req: ProviderPutRequest):
-        current = service.get_config("default")
+    def validate_provider(
+        req: ProviderPutRequest, user: dict = Depends(get_current_user)
+    ):
+        current = service.get_config(user["id"])
         model = req.model or current["model"]
         embedding_model = req.embedding_model or current["embedding_model"]
         try:
             ok, message = service.validate_connectivity(
-                "default",
+                user["id"],
                 mode=req.mode,
                 provider=req.provider,
                 model=model,

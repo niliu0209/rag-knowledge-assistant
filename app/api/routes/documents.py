@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
+from app.api.deps import get_current_user
 from app.services.ingest import (
     DocumentDeleteError,
     DocumentIngestService,
@@ -57,10 +58,13 @@ def create_documents_router(
     async def upload_document(
         file: UploadFile = File(...),
         category: str = Form(...),
+        user: dict = Depends(get_current_user),
     ):
         content = await file.read()
         try:
-            return service.ingest(file.filename or "unnamed", content, category)
+            return service.ingest(
+                file.filename or "unnamed", content, category, user_id=user["id"]
+            )
         except (IngestError, NoTextError) as exc:
             raise HTTPException(
                 status_code=_STATUS_MAP.get(type(exc), 422),
@@ -73,13 +77,13 @@ def create_documents_router(
             ) from exc
 
     @router.get("/api/documents")
-    def list_documents():
-        return service.list_documents()
+    def list_documents(user: dict = Depends(get_current_user)):
+        return service.list_documents(user_id=user["id"])
 
     @router.delete("/api/documents/{doc_id}")
-    def delete_document(doc_id: str):
+    def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
         try:
-            service.delete_document(doc_id)
+            service.delete_document(doc_id, user_id=user["id"])
         except IngestError as exc:
             raise HTTPException(
                 status_code=_STATUS_MAP.get(type(exc), 500),
@@ -92,7 +96,9 @@ def create_documents_router(
     BATCH_DELETE_MAX = 100
 
     @router.post("/api/documents/batch-delete")
-    async def batch_delete(request: Request):
+    async def batch_delete(
+        request: Request, user: dict = Depends(get_current_user)
+    ):
         try:
             body = await request.json()
         except Exception as exc:  # noqa: BLE001——JSON 解析失败返回统一错误体
@@ -138,7 +144,7 @@ def create_documents_router(
                 },
             )
         try:
-            deleted = service.delete_documents(seen)
+            deleted = service.delete_documents(seen, user_id=user["id"])
         except IngestError as exc:
             raise HTTPException(
                 status_code=_STATUS_MAP.get(type(exc), 500),

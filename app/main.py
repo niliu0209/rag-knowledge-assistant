@@ -19,6 +19,8 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 
 from app import __version__
+from app.api.routes.admin import create_admin_router
+from app.api.routes.auth import create_auth_router
 from app.api.routes.documents import create_documents_router
 from app.api.routes.health import create_health_router
 from app.api.routes.providers import create_providers_router
@@ -27,6 +29,7 @@ from app.core.config import get_settings
 from app.core.crypto import encrypt_text, get_fernet
 from app.data.db import get_connection
 from app.data.migrations import apply_migrations
+from app.services.auth import AuthService
 
 
 def create_app(
@@ -50,6 +53,10 @@ def create_app(
 
     app = FastAPI(title="rag-knowledge-assistant", version=__version__)
 
+    # 认证服务实例（api 依赖经 app.state 取用；测试可整体替换）
+    app.state.data_dir = data_dir
+    app.state.auth_service = AuthService(data_dir)
+
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request, exc: HTTPException):
         # 统一错误体 {error: {code, message}}（architecture.md API 合同）
@@ -57,6 +64,8 @@ def create_app(
         return JSONResponse(status_code=exc.status_code, content=exc.detail)
 
     app.include_router(create_health_router(data_dir))
+    app.include_router(create_auth_router())
+    app.include_router(create_admin_router(data_dir))
     app.include_router(
         create_providers_router(data_dir, provider_transport=provider_transport)
     )

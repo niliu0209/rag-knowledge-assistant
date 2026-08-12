@@ -9,14 +9,21 @@ from __future__ import annotations
 import httpx
 import streamlit as st
 
+from ui.http import get_client, handle_unauthorized
+
 
 def render(api_url: str) -> None:
     st.subheader("提供商配置")
 
+    client = get_client(api_url)
     try:
-        data = httpx.get(f"{api_url}/api/providers", timeout=5.0).json()
+        resp = client.get("/api/providers", timeout=5.0)
+        data = resp.json()
     except httpx.HTTPError as exc:
         st.error(f"无法连接后端服务：{exc}")
+        return
+    if resp.status_code == 401:
+        handle_unauthorized(api_url)
         return
     presets = data["presets"]
     current = data["current"]
@@ -99,10 +106,13 @@ def _call_api(
     api_url: str, method: str, path: str, payload: dict, on_success: str = ""
 ) -> None:
     try:
-        resp = httpx.request(method, f"{api_url}{path}", json=payload, timeout=30.0)
+        resp = get_client(api_url).request(method, path, json=payload, timeout=30.0)
         body = resp.json()
     except httpx.HTTPError as exc:
         st.error(f"请求失败：{exc}")
+        return
+    if resp.status_code == 401:
+        handle_unauthorized(api_url)
         return
     if resp.status_code in (200, 201):
         if path.endswith("/validate"):

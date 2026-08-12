@@ -31,7 +31,14 @@ def _embed_ok_handler(request: httpx.Request) -> httpx.Response:
 
 def _client(data_dir, handler=_embed_ok_handler):
     app = create_app(data_dir=data_dir, provider_transport=httpx.MockTransport(handler))
-    return TestClient(app)
+    c = TestClient(app)
+    # S2-1 认证合同：以首启 admin 身份注册并登录
+    resp = c.post(
+        "/api/auth/register",
+        json={"username": "admin", "password": "Passw0rd!@#"},
+    )
+    assert resp.status_code == 200, resp.text
+    return c
 
 
 def _upload(client, path, category="业务报告"):

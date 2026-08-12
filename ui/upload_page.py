@@ -9,6 +9,8 @@ from __future__ import annotations
 import httpx
 import streamlit as st
 
+from ui.http import get_client, handle_unauthorized
+
 CATEGORIES = ("开发调试", "业务报告", "其他")
 
 
@@ -28,8 +30,8 @@ def render(api_url: str) -> None:
         return
 
     try:
-        resp = httpx.post(
-            f"{api_url}/api/documents",
+        resp = get_client(api_url).post(
+            "/api/documents",
             files={"file": (file.name, file.getvalue(), "application/octet-stream")},
             data={"category": category},
             timeout=300.0,  # 解析+向量化，首次上传可能较慢
@@ -37,6 +39,10 @@ def render(api_url: str) -> None:
         body = resp.json()
     except httpx.HTTPError as exc:
         st.error(f"请求失败：{exc}")
+        return
+
+    if resp.status_code == 401:
+        handle_unauthorized(api_url)
         return
 
     if resp.status_code == 200:
