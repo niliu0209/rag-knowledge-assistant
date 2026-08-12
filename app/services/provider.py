@@ -122,7 +122,7 @@ class ProviderService:
         none=无 Key 可用），仅服务端内部与 UI 展示用，不是存储字段。
         """
         if cfg["mode"] == "preset" and not cfg.get("api_key"):
-            shared = get_settings().rag_shared_preset_key
+            shared = get_settings().rag_shared_preset_key or None  # 空 env 归一 None
             return {
                 **cfg,
                 "api_key": shared,

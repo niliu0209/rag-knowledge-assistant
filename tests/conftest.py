@@ -8,11 +8,18 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _clear_settings_cache():
-    """每个测试前清 Settings 缓存：防止首个无 fixture 测试缓存真实 env，
-    import app.main 曾因此把迁移/密钥副作用打进真实 data 目录（S1-2 修复）。"""
+def _clear_settings_cache(monkeypatch):
+    """每个测试前清 Settings 缓存并屏蔽 .env 注入（S2-2 起本地 .env 可能含
+    真实 RAG_SHARED_PRESET_KEY / RAG_KEY_ENCRYPTION_KEY——测试环境必须与
+    本地配置隔离，否则「无共享 Key」假设的测试被真实注入破坏）。
+
+    需要共享 Key 的测试自行 monkeypatch.setenv + cache_clear（如
+    test_provider_service._inject_shared_key）。"""
     from app.core.config import get_settings
 
+    # pydantic-settings 优先级：env 变量 > .env 文件；置空 env 覆盖 dotenv 注入
+    monkeypatch.setenv("RAG_SHARED_PRESET_KEY", "")
+    monkeypatch.setenv("RAG_KEY_ENCRYPTION_KEY", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

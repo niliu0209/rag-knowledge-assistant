@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import sys
+import uuid
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
@@ -81,7 +82,9 @@ def click_radio(page: Page, name: str) -> None:
 
 
 def main() -> int:
-    docx_path = Path("/tmp/s22-friend3.docx")
+    # 唯一文件名：同名文档会被服务端拒绝（409 duplicate_document，防覆盖设计），
+    # 多次跑本脚本时避免与残留文档冲突
+    docx_path = Path(f"/tmp/s22-friend3-{uuid.uuid4().hex[:8]}.docx")
     make_docx(docx_path, None)
 
     with sync_playwright() as p:
@@ -120,6 +123,23 @@ def main() -> int:
         check("预设模式无 Key 输入框", key_inputs.count() == 0)
         check("共享 Key 掩码不回显", "sk-****" not in page.inner_text("body"))
         shot(page, "01-preset-shared-status")
+
+        # 3.5 模式切换即时生效（用户实测暴露：form 内 radio 提交前不更新脚本值，
+        # 切 BYOK 无 API Key 输入框；radio 移出 form 后修复）
+        page.get_by_text("自带 Key（BYOK）", exact=True).first.click()
+        page.wait_for_timeout(1000)
+        check(
+            "切 BYOK 显示 API Key 输入框",
+            page.get_by_role("textbox", name="API Key").count() == 1,
+        )
+        check("BYOK 分支显示提供商下拉", "提供商" in page.inner_text("body"))
+        page.get_by_text("免费预设", exact=True).first.click()
+        page.wait_for_timeout(1000)
+        check(
+            "切回预设 API Key 输入框消失",
+            page.get_by_role("textbox", name="API Key").count() == 0,
+        )
+        shot(page, "01b-mode-switch-instant")
 
         # 4. friend3 上传中文 docx（真实入库，随后问答才有检索命中）
         click_radio(page, "文档上传")

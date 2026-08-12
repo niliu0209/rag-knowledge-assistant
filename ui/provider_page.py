@@ -31,15 +31,18 @@ def render(api_url: str) -> None:
     presets = data["presets"]
     current = data["current"]
 
-    with st.form("provider_config"):
-        mode = st.radio(
-            "模式",
-            options=["preset", "byok"],
-            format_func=lambda m: "免费预设" if m == "preset" else "自带 Key（BYOK）",
-            index=0 if current["mode"] == "preset" else 1,
-            horizontal=True,
-        )
+    # 模式 radio 必须在 form 外：Streamlit form 内控件在提交前不更新脚本值，
+    # 否则点击 radio 只有视觉变化、分支不切换（用户实测暴露：切 BYOK 无
+    # API Key 输入框）。
+    mode = st.radio(
+        "模式",
+        options=["preset", "byok"],
+        format_func=lambda m: "免费预设" if m == "preset" else "自带 Key（BYOK）",
+        index=0 if current["mode"] == "preset" else 1,
+        horizontal=True,
+    )
 
+    with st.form("provider_config"):
         if mode == "preset":
             preset_ids = [p["id"] for p in presets]
             preset_labels = {p["id"]: f'{p["name"]}（{p["model"]}）' for p in presets}
