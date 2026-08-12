@@ -104,7 +104,7 @@ class DocumentIngestService:
         for old in old_failed:  # 旧 failed 记录不应有向量；保险清理（尽力而为）
             try:
                 chroma_store.delete_by_doc_id(
-                    chroma_store.get_collection(self.data_dir), old["id"]
+                    chroma_store.get_collection(self.data_dir), old["id"], user_id
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("清理旧 failed 向量失败（doc_id=%s）: %s", old["id"], exc)
@@ -193,11 +193,11 @@ class DocumentIngestService:
                 "status": "ready",
             }
         except (IngestError, EmbeddingMismatchError, NoTextError):
-            self._compensate(doc_id, file_path)
+            self._compensate(doc_id, file_path, user_id)
             raise
         except Exception as exc:  # noqa: BLE001——未预期异常（存储故障等）同样补偿与 failed 记录
             logger.exception("入库管线未预期失败: %s", filename)
-            self._compensate(doc_id, file_path)
+            self._compensate(doc_id, file_path, user_id)
             raise InternalIngestError("入库失败，请重试或检查服务状态") from exc
 
     # ---------- 校验 ----------
@@ -237,7 +237,7 @@ class DocumentIngestService:
             with get_connection(self.data_dir) as conn:
                 document_store.delete_document(conn, doc_id)
             chroma_store.delete_by_doc_id(
-                chroma_store.get_collection(self.data_dir), doc_id
+                chroma_store.get_collection(self.data_dir), doc_id, user_id
             )
         except DocumentNotFoundError:
             raise
@@ -291,7 +291,7 @@ class DocumentIngestService:
                     document_store.delete_document(conn, doc_id)
             collection = chroma_store.get_collection(self.data_dir)
             for doc_id in doc_ids:
-                chroma_store.delete_by_doc_id(collection, doc_id)
+                chroma_store.delete_by_doc_id(collection, doc_id, user_id)
         except Exception as exc:  # noqa: BLE001——删除失败走补偿回滚（F0-2 验收）
             logger.exception("批量删除失败（%d 个文档），补偿回滚", len(doc_ids))
             try:
@@ -332,11 +332,13 @@ class DocumentIngestService:
 
     # ---------- 补偿回滚 ----------
 
-    def _compensate(self, doc_id: str, file_path: Path) -> None:
+    def _compensate(
+        self, doc_id: str, file_path: Path, user_id: str | None = None
+    ) -> None:
         """任一步失败：删已写向量 + 清理文件 + 记录 failed 状态（架构链路一第 9 步）。"""
         try:
             collection = chroma_store.get_collection(self.data_dir)
-            chroma_store.delete_by_doc_id(collection, doc_id)
+            chroma_store.delete_by_doc_id(collection, doc_id, user_id)
         except Exception as exc:  # noqa: BLE001——补偿尽力而为，异常不掩盖原始错误
             logger.warning("补偿删除向量失败（doc_id=%s）: %s", doc_id, exc)
         try:

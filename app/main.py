@@ -44,7 +44,7 @@ def create_app(
             conn,
             # S1-2：v003 明文 Key 迁移加密（主密钥 env 注入优先，否则持久化密钥文件）
             legacy_encryptor=partial(
-                encrypt_text, get_fernet(data_dir, settings.key_encryption_key)
+                encrypt_text, get_fernet(data_dir, settings.rag_key_encryption_key)
             ),
             # 回滚路径：v003 转换前备份原库（含迁移前明文，按敏感数据保管）
             backup_path=data_dir

@@ -41,6 +41,24 @@ def test_env_key_preferred_over_file(data_dir):
     assert not (data_dir / "secrets").exists()
 
 
+def test_rag_env_name_reaches_settings(data_dir, monkeypatch):
+    """S2-2 遗留修复锁定：env 名 RAG_KEY_ENCRYPTION_KEY 必须映射进 Settings。
+
+    S1-2 时字段名 key_encryption_key 与 env 名不匹配（pydantic-settings 按字段
+    名匹配），env 注入路径实际未生效（靠参数路径兜底生成密钥文件）；字段改名
+    rag_key_encryption_key 后此处锁定 env → Settings 链路。
+    """
+    key = generate_key()
+    monkeypatch.setenv("RAG_KEY_ENCRYPTION_KEY", key)
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        assert get_settings().rag_key_encryption_key == key
+    finally:
+        get_settings.cache_clear()
+
+
 def test_invalid_env_key_raises(data_dir):
     with pytest.raises(RuntimeError):
         get_fernet(data_dir, "not-a-valid-fernet-key")

@@ -11,6 +11,9 @@ services:
       API_PORT: "8000"
       # S1-2 Key 加密主密钥（可选：注入则密钥与数据分离；未注入自动生成到 /data/secrets/）
       RAG_KEY_ENCRYPTION_KEY: ${RAG_KEY_ENCRYPTION_KEY:-}
+      # S2-2 平台共享免费预设 Key（可选：注入后 preset 用户无需自备 Key；
+      # 不入库/日志/界面，仅服务端调用免费预设时回落使用）
+      RAG_SHARED_PRESET_KEY: ${RAG_SHARED_PRESET_KEY:-}
     volumes:
       - rag-data:/data
     healthcheck:

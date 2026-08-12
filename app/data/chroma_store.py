@@ -34,9 +34,21 @@ def add_chunks(
     collection.add(ids=ids, documents=texts, metadatas=metadatas, embeddings=embeddings)
 
 
-def delete_by_doc_id(collection: chromadb.Collection, doc_id: str) -> None:
-    """按 doc_id metadata 删除该文档全部切片（补偿回滚/F0-2 删除复用）。"""
-    collection.delete(where={"doc_id": doc_id})
+def delete_by_doc_id(
+    collection: chromadb.Collection, doc_id: str, user_id: str | None = None
+) -> None:
+    """按 doc_id（+ user_id，S2-2 加固：跨用户同 doc_id 不误删）删除该文档全部切片。
+
+    删除链路全部调用点带 user_id（架构：所有数据访问强制 user_id）。
+    Chroma where 多条件须 $and 语法（平铺 dict 仅允许单条件）。
+    """
+    if user_id:
+        where: dict[str, object] = {
+            "$and": [{"doc_id": doc_id}, {"user_id": user_id}]
+        }
+    else:
+        where = {"doc_id": doc_id}
+    collection.delete(where=where)
 
 
 def query_chunks(

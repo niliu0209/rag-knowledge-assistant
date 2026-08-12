@@ -110,10 +110,25 @@ class ProviderService:
         # S1-2：主密钥解析（显式参数优先 → settings env → 持久化密钥文件）。
         # 无效注入值在构造即抛错，防"存得进解不开"。
         self._fernet = get_fernet(
-            data_dir, key_encryption_key or get_settings().key_encryption_key
+            data_dir, key_encryption_key or get_settings().rag_key_encryption_key
         )
 
     # ---------- 配置读写 ----------
+
+    def _resolve_effective_key(self, cfg: dict[str, Any]) -> dict[str, Any]:
+        """mode=preset 且无已存 Key → 回落平台共享 Key（RAG_SHARED_PRESET_KEY env）。
+
+        返回 cfg 副本 + key_source 标记（own=自备 Key / shared=共享回落 /
+        none=无 Key 可用），仅服务端内部与 UI 展示用，不是存储字段。
+        """
+        if cfg["mode"] == "preset" and not cfg.get("api_key"):
+            shared = get_settings().rag_shared_preset_key
+            return {
+                **cfg,
+                "api_key": shared,
+                "key_source": "shared" if shared else "none",
+            }
+        return {**cfg, "key_source": "own" if cfg.get("api_key") else "none"}
 
     def _decrypt_key(self, token: str | None) -> str | None:
         """服务端内部解密已存 Key；密文损坏/主密钥不匹配 → 友好错误。"""
@@ -126,23 +141,37 @@ class ProviderService:
             ) from exc
 
     def get_config(self, user_id: str) -> dict[str, Any]:
-        """当前生效配置（含掩码 Key）；无存储记录时返回默认预设。"""
+        """当前生效配置（含掩码 Key 与 key_source）；无存储记录时返回默认预设。"""
         with sqlite3.connect(self.data_dir / "rag.db") as conn:
             row = get_provider_settings(conn, user_id)
         if row is None:
-            return {
-                "mode": "preset",
-                "provider": DEFAULT_PRESET["provider"],
-                "model": DEFAULT_PRESET["model"],
-                "embedding_model": DEFAULT_PRESET["embedding_model"],
-                "key_masked": "",
-            }
+            effective = self._resolve_effective_key(
+                {
+                    "mode": "preset",
+                    "provider": DEFAULT_PRESET["provider"],
+                    "model": DEFAULT_PRESET["model"],
+                    "embedding_model": DEFAULT_PRESET["embedding_model"],
+                    "api_key": None,
+                }
+            )
+            return self._config_view(effective)
+        effective = self._resolve_effective_key(
+            {**row, "api_key": self._decrypt_key(row["api_key"])}
+        )
+        return self._config_view(effective)
+
+    def _config_view(self, effective: dict[str, Any]) -> dict[str, Any]:
+        """对外配置视图：shared 回落 Key 的掩码也不进响应（不入界面原则）。"""
         return {
-            "mode": row["mode"],
-            "provider": row["provider"],
-            "model": row["model"],
-            "embedding_model": row["embedding_model"],
-            "key_masked": mask_api_key(self._decrypt_key(row["api_key"])),
+            "mode": effective["mode"],
+            "provider": effective["provider"],
+            "model": effective["model"],
+            "embedding_model": effective["embedding_model"],
+            "key_masked": (
+                "" if effective["key_source"] == "shared"
+                else mask_api_key(effective["api_key"])
+            ),
+            "key_source": effective["key_source"],
         }
 
     def save_config(
@@ -168,7 +197,8 @@ class ProviderService:
                 provider=provider,
                 model=model,
                 embedding_model=embedding_model,
-                api_key=encrypt_text(self._fernet, api_key),
+                # 空串视为显式清空（存 NULL，preset 回落共享）；None 同样存 NULL
+                api_key=encrypt_text(self._fernet, api_key) if api_key else None,
                 base_url=resolved,
             )
 
@@ -181,15 +211,19 @@ class ProviderService:
         with sqlite3.connect(self.data_dir / "rag.db") as conn:
             row = get_provider_settings(conn, user_id)
         if row is None:
-            return {
-                "mode": "preset",
-                "provider": DEFAULT_PRESET["provider"],
-                "model": DEFAULT_PRESET["model"],
-                "embedding_model": DEFAULT_PRESET["embedding_model"],
-                "api_key": None,
-                "base_url": DEFAULT_PRESET["base_url"],
-            }
-        return {**row, "api_key": self._decrypt_key(row["api_key"])}
+            return self._resolve_effective_key(
+                {
+                    "mode": "preset",
+                    "provider": DEFAULT_PRESET["provider"],
+                    "model": DEFAULT_PRESET["model"],
+                    "embedding_model": DEFAULT_PRESET["embedding_model"],
+                    "api_key": None,
+                    "base_url": DEFAULT_PRESET["base_url"],
+                }
+            )
+        return self._resolve_effective_key(
+            {**row, "api_key": self._decrypt_key(row["api_key"])}
+        )
 
     # ---------- 配置校验 ----------
 
@@ -229,7 +263,10 @@ class ProviderService:
         if not embedding_model or not embedding_model.strip():
             raise InvalidConfigError("embedding_model 不能为空")
         if not api_key or not api_key.strip():
-            raise InvalidConfigError("api_key 不能为空（免费预设同样需要 Key 认证）")
+            # S2-2：preset 模式 Key 可空（回落平台共享 RAG_SHARED_PRESET_KEY）；
+            # BYOK 必须自备。共享也未配置时由连通校验/真实调用 401 兜底提示。
+            if mode != "preset":
+                raise InvalidConfigError("api_key 不能为空（BYOK 模式必须提供自己的 Key）")
 
     # ---------- 外部调用（OpenAI 兼容，429/5xx 指数退避） ----------
 
@@ -323,8 +360,23 @@ class ProviderService:
         embedding_model = (
             cfg["embedding_model"] if embedding_model is _UNSET else embedding_model
         )
-        api_key = cfg["api_key"] if api_key is _UNSET else api_key
+        # api_key 未传 / None / 空串（显式清空）均回落存储配置（含共享回落后的
+        # 值）；仅 base_url 保持"显式 None 覆盖"语义（custom 校验必须带 base_url）。
+        api_key = (
+            cfg["api_key"]
+            if (api_key is _UNSET or api_key is None or api_key == "")
+            else api_key
+        )
         base_url = cfg["base_url"] if base_url is _UNSET else base_url
+
+        # S2-2：preset 无任何可用 Key（未自备且共享未配置）→ 不发请求直接提示，
+        # 避免把「共享未配置」误报为「API Key 无效」。
+        if mode == "preset" and not api_key:
+            return (
+                False,
+                "免费预设暂不可用：平台共享 Key 未配置（RAG_SHARED_PRESET_KEY），"
+                "请联系管理员，或切换 BYOK 配置自己的 Key",
+            )
 
         # 候选配置临时生效（仅本次请求），校验失败不落库
         candidate = {

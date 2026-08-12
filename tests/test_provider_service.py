@@ -242,3 +242,101 @@ def test_embedding_consistency_same_model_ok(data_dir):
     )
     svc = _service(data_dir)
     svc.check_embedding_consistency(collection, "BAAI/bge-m3")
+
+
+# ---------- S2-2 平台共享预设 Key（回落 RAG_SHARED_PRESET_KEY） ----------
+
+def _inject_shared_key(monkeypatch, key="sk-sharedtestkey"):
+    monkeypatch.setenv("RAG_SHARED_PRESET_KEY", key)
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_preset_without_key_falls_back_to_shared(data_dir, monkeypatch):
+    """preset 无已存 Key → 回落平台共享 Key（服务端调用取值 get_full_config）。"""
+    _inject_shared_key(monkeypatch)
+    svc = _service(data_dir)
+    cfg = svc.get_full_config("default")
+    assert cfg["api_key"] == "sk-sharedtestkey"
+    assert cfg["key_source"] == "shared"
+    shown = svc.get_config("default")
+    assert shown["key_source"] == "shared"
+    # S2-2：共享 Key 不入界面——掩码也不回显（区别于自有 Key 的掩码展示）
+    assert shown["key_masked"] == ""
+
+
+def test_validate_connectivity_preset_without_any_key_reports_shared_missing(
+    data_dir,
+):
+    """preset 无已存 Key 且平台共享未配置 → 不发请求，直接提示共享 Key 缺失。
+
+    S2-2：避免把「共享未配置」误报为「API Key 无效」（误导用户输自己的 Key）。
+    """
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(401, json={})
+
+    svc = _service(data_dir, transport=httpx.MockTransport(handler))
+    ok, message = svc.validate_connectivity("default")
+    assert ok is False
+    assert "RAG_SHARED_PRESET_KEY" in message
+    assert calls == []  # 未发任何请求（共享未配置时无 Key 可试）
+
+
+def test_preset_with_own_key_no_fallback(data_dir, monkeypatch):
+    """preset 已存自己的 Key → 用自己的（不回落共享）。"""
+    _inject_shared_key(monkeypatch)
+    svc = _service(data_dir)
+    svc.save_config(
+        "default",
+        mode="preset",
+        provider="siliconflow-free",
+        model="Qwen/Qwen3-14B",
+        embedding_model="BAAI/bge-m3",
+        api_key="sk-ownkey-1234",
+        base_url=None,
+    )
+    cfg = svc.get_full_config("default")
+    assert cfg["api_key"] == "sk-ownkey-1234"
+    assert cfg["key_source"] == "own"
+
+
+def test_validate_config_preset_allows_empty_key(data_dir):
+    """preset 无 Key 允许（回落共享）；格式校验通过。"""
+    svc = _service(data_dir)
+    svc.validate_config("preset", "siliconflow-free", "M", "E", None, None)
+
+
+def test_validate_config_byok_still_requires_key(data_dir):
+    """BYOK 仍必须自备 Key（格式校验拒绝空）。"""
+    svc = _service(data_dir)
+    with pytest.raises(InvalidConfigError):
+        svc.validate_config("byok", "siliconflow", "M", "E", None, None)
+
+
+def test_chat_uses_shared_key(data_dir, monkeypatch):
+    """真实行为：preset 无 Key 用户 chat 请求携带共享 Key（Authorization 头断言）。"""
+    _inject_shared_key(monkeypatch)
+    seen = {}
+
+    def handler(request):
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    svc = _service(data_dir, transport=httpx.MockTransport(handler))
+    assert svc.chat("default", "hi") == "ok"
+    assert seen["auth"] == "Bearer sk-sharedtestkey"
+
+
+def test_chat_no_key_no_shared_401(data_dir):
+    """无已存 Key 且平台共享未配置 → 真实 401 → InvalidKeyError（提示配置）。"""
+
+    def handler(request):
+        return httpx.Response(401, json={})
+
+    svc = _service(data_dir, transport=httpx.MockTransport(handler))
+    with pytest.raises(InvalidKeyError):
+        svc.chat("default", "hi")

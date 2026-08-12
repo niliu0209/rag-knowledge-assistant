@@ -133,3 +133,99 @@ def test_validate_endpoint(data_dir):
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
     assert "Key" in resp.json()["message"]
+
+
+def test_put_preset_without_key_ok(data_dir, monkeypatch):
+    """S2-2：preset 模式允许不传 Key（回落平台共享，非 BYOK 必须自备）。
+
+    模拟真实部署：平台共享 Key 已配置（RAG_SHARED_PRESET_KEY env）。
+    """
+    monkeypatch.setenv("RAG_SHARED_PRESET_KEY", "sk-sharedtestkey")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = _client(data_dir, transport=httpx.MockTransport(handler))
+    resp = client.put(
+        "/api/provider",
+        json={
+            "mode": "preset",
+            "provider": "siliconflow-free",
+            "model": "Qwen/Qwen3-14B",
+            "embedding_model": "BAAI/bge-m3",
+        },
+    )
+    assert resp.status_code == 200
+
+
+def test_put_preset_without_key_does_not_store_shared_key(data_dir, monkeypatch):
+    """S2-2：preset 未传 Key 保存后，共享 Key 不得写入用户自己的库行（不入库原则）。"""
+    import sqlite3
+
+    monkeypatch.setenv("RAG_SHARED_PRESET_KEY", "sk-sharedtestkey")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = _client(data_dir, transport=httpx.MockTransport(handler))
+    resp = client.put(
+        "/api/provider",
+        json={
+            "mode": "preset",
+            "provider": "siliconflow-free",
+            "model": "Qwen/Qwen3-14B",
+            "embedding_model": "BAAI/bge-m3",
+        },
+    )
+    assert resp.status_code == 200
+    conn = sqlite3.connect(data_dir / "rag.db")
+    try:
+        # user_id 为注册生成的 UUID；本测试仅 admin 一行配置，直接断言全表
+        rows = conn.execute("SELECT api_key FROM provider_settings").fetchall()
+    finally:
+        conn.close()
+    # 存储行无 Key（NULL）：回落共享只发生在调用取值时，不落库
+    assert len(rows) == 1
+    assert rows[0][0] is None
+
+
+def test_put_preset_explicit_empty_key_clears_stored(data_dir, monkeypatch):
+    """S2-2 UI 清除路径：显式空串清空已存自有 Key → 回落共享（库行转 NULL）。"""
+    import sqlite3
+
+    monkeypatch.setenv("RAG_SHARED_PRESET_KEY", "sk-sharedtestkey")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = _client(data_dir, transport=httpx.MockTransport(handler))
+    base = {
+        "mode": "preset",
+        "provider": "siliconflow-free",
+        "model": "Qwen/Qwen3-14B",
+        "embedding_model": "BAAI/bge-m3",
+    }
+    # 先保存自有 Key
+    r1 = client.put("/api/provider", json={**base, "api_key": "sk-own1234567890"})
+    assert r1.status_code == 200
+    # 显式空串清除（UI「改用平台共享额度」按钮）
+    r2 = client.put("/api/provider", json={**base, "api_key": ""})
+    assert r2.status_code == 200
+    # 生效配置回落共享；库行 Key 已清空
+    current = client.get("/api/providers").json()["current"]
+    assert current["key_source"] == "shared"
+    conn = sqlite3.connect(data_dir / "rag.db")
+    try:
+        row = conn.execute("SELECT api_key FROM provider_settings").fetchone()
+    finally:
+        conn.close()
+    assert row[0] is None

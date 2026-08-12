@@ -242,3 +242,32 @@ def test_embedding_mismatch_409_no_write(data_dir, tmp_path):
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "embedding_mismatch"
     assert col.count() == 1  # 未新增
+
+
+# ---------- S2-2 加固：delete_by_doc_id 带 user_id ----------
+
+def test_chroma_delete_by_doc_id_scoped_to_user(data_dir):
+    """S2-2：删除切片按 doc_id + user_id 过滤——跨用户同 doc_id 不误删。
+
+    doc_id 是全局唯一 UUID，同 doc_id 跨用户仅防御性场景；本测试锁定
+    delete_by_doc_id 的 user_id 过滤合同（架构删除链路强 user_id）。
+    """
+    from app.data import chroma_store
+
+    col = chroma_store.get_collection(data_dir)
+    chroma_store.add_chunks(
+        col,
+        ids=["a1"], texts=["a"],
+        metadatas=[{"user_id": "user-a", "doc_id": "d1", "category": "其他"}],
+        embeddings=[[0.1, 0.2, 0.3, 0.4]],
+    )
+    chroma_store.add_chunks(
+        col,
+        ids=["b1"], texts=["b"],
+        metadatas=[{"user_id": "user-b", "doc_id": "d1", "category": "其他"}],
+        embeddings=[[0.5, 0.6, 0.7, 0.8]],
+    )
+    chroma_store.delete_by_doc_id(col, "d1", user_id="user-a")
+    ids = _chroma_rows(data_dir)["ids"]
+    assert "a1" not in ids
+    assert "b1" in ids

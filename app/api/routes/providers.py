@@ -53,8 +53,15 @@ def create_providers_router(
         current = service.get_full_config(user["id"])
         model = req.model or current["model"]
         embedding_model = req.embedding_model or current["embedding_model"]
-        # 未传 Key 时保留已存 Key（避免覆盖清空）
-        api_key = req.api_key if req.api_key is not None else current["api_key"]
+        # S2-2 未传 Key 时：已存自有 Key（own）保留；无自有 Key（shared/none）存
+        # NULL 回落共享——current["api_key"] 此时是平台共享 Key，不得写入用户行
+        # （共享 Key 不入库原则）。
+        if req.api_key is not None:
+            api_key = req.api_key
+        elif current["key_source"] == "own":
+            api_key = current["api_key"]
+        else:
+            api_key = None
         try:
             service.validate_config(
                 req.mode, req.provider, model, embedding_model, api_key, req.base_url
