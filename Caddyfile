@@ -1,0 +1,26 @@
+# S2-3 公开部署：Caddy 反代 + HTTPS 自动证书（compose env CADDY_DOMAIN 注入）
+# - 本地验证：CADDY_DOMAIN=localhost（Caddy 自动 internal CA 本地证书）
+# - 线上：CADDY_DOMAIN=example.com（Let's Encrypt HTTP-01 自动签发）
+# 同一 Caddyfile 零修改切换；api 仍栈内（仅 ui:8501 对外反代）。
+
+{$CADDY_DOMAIN:localhost} {
+	reverse_proxy ui:8501
+
+	# S2-3 安全加固头（官方文档 header 指令；HSTS 上线生效）
+	header {
+		Strict-Transport-Security max-age=31536000;
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Permissions-Policy interest-cohort=()
+	}
+
+	# S2-3 访问日志落盘（rag-logs 卷，卷内持久化；滚动防膨胀）
+	log {
+		output file /logs/caddy_access.log {
+			roll_size 100MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+	}
+}

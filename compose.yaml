@@ -1,5 +1,6 @@
-# 阶段 0 单栈：api（数据与业务全部在此）+ ui（纯客户端）
-# 对外只暴露 ui:8501；api:8000 仅栈内可达；数据统一在命名卷 rag-data
+# 单栈：api（数据与业务全部在此）+ ui（纯客户端）+ caddy（S2-3 反代 80/443）
+# 对外只暴露 80/443（Caddy）；api:8000 仅栈内可达；ui:8501 仅栈内可达；
+# 数据统一在命名卷 rag-data；日志在 rag-data（api）/rag-logs（caddy）
 name: rag-knowledge-assistant
 
 services:
@@ -14,6 +15,10 @@ services:
       # S2-2 平台共享免费预设 Key（可选：注入后 preset 用户无需自备 Key；
       # 不入库/日志/界面，仅服务端调用免费预设时回落使用）
       RAG_SHARED_PRESET_KEY: ${RAG_SHARED_PRESET_KEY:-}
+      # S2-3 会话 cookie Secure 标志：HTTPS 上线置 true（.env 配置 RAG_COOKIE_SECURE=true）
+      COOKIE_SECURE: ${RAG_COOKIE_SECURE:-false}
+      # S2-3 日志落盘（rag-data 卷内，随数据备份）
+      LOG_DIR: /data/logs
     volumes:
       - rag-data:/data
     healthcheck:
@@ -30,12 +35,33 @@ services:
     environment:
       API_URL: http://api:8000
       UI_PORT: "8501"
-    ports:
-      - "8501:8501"
+      # S2-3 页脚备案号（备案通过后 .env 配置；未配置不显示）
+      ICP_NUMBER: ${RAG_ICP_NUMBER:-}
+      POLICE_NUMBER: ${RAG_POLICE_NUMBER:-}
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # S2-3 站点域名：本地验证 localhost（internal CA）；上线 example.com（Let's Encrypt）
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - rag-logs:/logs
+    depends_on:
+      - ui
+    restart: unless-stopped
+
 volumes:
   rag-data:
+  caddy_data:
+  caddy_config:
+  rag-logs:

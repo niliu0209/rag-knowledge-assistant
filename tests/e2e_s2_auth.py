@@ -20,7 +20,7 @@ from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
-BASE_URL = "http://localhost:8501"
+BASE_URL = "https://localhost"  # S2-3 起入口为 Caddy HTTPS（internal CA 本地证书）
 SHOT_DIR = Path("/tmp/e2e-screenshots")
 PREFIX = "s21"
 
@@ -76,7 +76,11 @@ def click_radio(page: Page, name: str) -> None:
 
 
 def st_selectbox(page: Page, label: str, option: str) -> None:
-    """Streamlit selectbox（baseweb Select：combobox + option，非原生 select）。"""
+    """Streamlit selectbox（baseweb Select：combobox + option，非原生 select）。
+
+    新版 Streamlit 容器点击不再展开下拉——点击后检查 aria-expanded，
+    未展开则用键盘 ArrowDown 兜底（实测有效）。
+    """
     box = (
         page.locator('[data-testid="stSelectbox"]', has_text=label)
         .locator('[role="combobox"]')
@@ -84,6 +88,9 @@ def st_selectbox(page: Page, label: str, option: str) -> None:
     )
     box.click()
     page.wait_for_timeout(600)
+    if box.get_attribute("aria-expanded") != "true":
+        box.press("ArrowDown")
+        page.wait_for_timeout(600)
     page.get_by_role("option", name=option).click()
     page.wait_for_timeout(600)
 
@@ -91,7 +98,8 @@ def st_selectbox(page: Page, label: str, option: str) -> None:
 def main() -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        context = browser.new_context(ignore_https_errors=True, viewport={"width": 1400, "height": 1000})
+        page = context.new_page()
 
         # 1. 未登录 → 认证门
         page.goto(BASE_URL, wait_until="networkidle")
@@ -108,9 +116,18 @@ def main() -> int:
         check("侧边栏显示管理员标识", "（管理员）" in body)
         shot(page, "02-admin-home")
 
-        # 3. 管理页：生成邀请码
+        # 3. 管理页：若 friend2 处于停用状态（上次运行「停用即时失效」用例的
+        # 遗留），先启用——保证脚本可重复运行（前置自修复）
         click_radio(page, "管理")
         page.wait_for_timeout(800)
+        st_selectbox(page, "选择用户", FRIEND2_USER)
+        enable_btn = page.get_by_role("button", name="启用")
+        if enable_btn.is_enabled():
+            enable_btn.click()
+            page.wait_for_timeout(800)
+            print("  ⟳ friend2 已重新启用（上次运行遗留的停用状态）")
+        else:
+            st_selectbox(page, "选择用户", FRIEND2_USER)  # 还原选择，避免影响后续 selectbox 状态
         page.get_by_role("button", name="生成邀请码").click()
         page.wait_for_timeout(800)
         code_text = page.locator("pre").first.inner_text().strip()

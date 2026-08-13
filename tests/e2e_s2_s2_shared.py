@@ -28,7 +28,7 @@ from playwright.sync_api import Page, sync_playwright
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.fixture_docs import make_docx  # noqa: E402
 
-BASE_URL = "http://localhost:8501"
+BASE_URL = "https://localhost"  # S2-3 起入口为 Caddy HTTPS（internal CA 本地证书）
 SHOT_DIR = Path("/tmp/e2e-screenshots")
 PREFIX = "s22"
 
@@ -89,7 +89,8 @@ def main() -> int:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1400, "height": 1000})
+        context = browser.new_context(ignore_https_errors=True, viewport={"width": 1400, "height": 1000})
+        page = context.new_page()
 
         # 1. admin 登录 → 管理页生成邀请码
         page.goto(BASE_URL, wait_until="networkidle")

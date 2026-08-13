@@ -14,7 +14,9 @@ from app.core.config import get_settings
 from ui.admin_page import render as render_admin_page
 from ui.auth_page import render_auth_page
 from ui.documents_page import render as render_documents_page
+from ui.footer import render_footer
 from ui.http import clear_auth, get_client
+from ui.privacy_page import render_privacy_page
 from ui.provider_page import render as render_provider_page
 from ui.qa_page import render as render_qa_page
 from ui.theme import inject_theme
@@ -47,7 +49,7 @@ except httpx.HTTPError:
     pass  # 服务不可达：保留登录态，页面内已有错误提示
 
 # ---------- 导航 ----------
-options = ["首页", "文档上传", "文档列表", "问答", "提供商配置"]
+options = ["首页", "文档上传", "文档列表", "问答", "提供商配置", "隐私说明"]
 if user["role"] == "admin":
     options.append("管理")
 
@@ -61,6 +63,9 @@ with st.sidebar:
             pass
         clear_auth()
         st.rerun()
+
+# S2-3 页脚备案号（env 配置后展示，所有页面可见；未配置不显示）
+render_footer(settings.icp_number, settings.police_number)
 
 if page == "文档上传":
     render_upload_page(api_url)
@@ -76,6 +81,10 @@ if page == "问答":
 
 if page == "提供商配置":
     render_provider_page(api_url)
+    st.stop()
+
+if page == "隐私说明":
+    render_privacy_page()
     st.stop()
 
 if page == "管理":
