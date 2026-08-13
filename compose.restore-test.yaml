@@ -1,0 +1,59 @@
+# S2-4 恢复演练栈：独立 project rag-restore-test + 副本卷 rag-restore-test，
+# 绝不动生产数据卷 rag-data（生产 compose.yaml 卷不变）。
+# 不映射任何宿主端口（api/ui/caddy 仅栈内可达）——演练只核对数据与行为，
+# 部署形态由生产栈覆盖；用现有镜像，不重复构建。
+# 用法：scripts/restore_test.sh（起栈 → 还原核对 → down -v 清理）
+name: rag-restore-test
+
+services:
+  api:
+    image: rag-knowledge-assistant-api
+    environment:
+      DATA_DIR: /data
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      # S2-4 演练：与生产同源的加密主密钥与共享预设 Key（.env 读取），
+      # 保证还原后 Key 解密与共享回落与生产一致
+      RAG_KEY_ENCRYPTION_KEY: ${RAG_KEY_ENCRYPTION_KEY:-}
+      RAG_SHARED_PRESET_KEY: ${RAG_SHARED_PRESET_KEY:-}
+      COOKIE_SECURE: "false"
+      LOG_DIR: /data/logs
+    volumes:
+      - rag-restore-test:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  ui:
+    image: rag-knowledge-assistant-ui
+    command: ["/usr/local/bin/ui_entrypoint.sh"]
+    environment:
+      API_URL: http://api:8000
+      UI_PORT: "8501"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      CADDY_DOMAIN: localhost
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - ui
+
+volumes:
+  # 显式固定裸卷名：与 scripts/restore_test.sh 的一次性还原容器共用同一卷
+  # （compose 默认会加 project 前缀，两处挂载就分叉了）
+  rag-restore-test:
+    name: rag-restore-test
+  caddy_data:
+    name: rag-restore-test_caddy_data
+  caddy_config:
+    name: rag-restore-test_caddy_config

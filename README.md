@@ -61,7 +61,9 @@ FastAPI · Streamlit · ChromaDB · SQLite · LlamaIndex（解析/切片原语�
 app/        FastAPI 服务（api 路由薄层 / 业务服务 / 数据层）
 ui/         Streamlit 前端（纯客户端）
 rag/        文档解析与切片
-tests/      pytest 测试套件（123 个用例）
+tests/      pytest 测试套件（132 个用例）
+scripts/    备份 / 恢复演练宿主编排（backup.sh / restore_test.sh）
+backups/    备份产物目录（rag-backup-<UTC时间戳>.tar.gz，权限 700/600）
 Caddyfile   公开部署反代配置（域名经 env CADDY_DOMAIN 注入）
 dev-docs/   项目内部文档（产品边界、架构、阶段实施记录——含设计取舍证据）
 ```
@@ -69,8 +71,26 @@ dev-docs/   项目内部文档（产品边界、架构、阶段实施记录—�
 ## 测试
 
 ```bash
-pytest          # 123 个用例：上传/删除补偿、迁移、加密、检索阈值、多轮历史、批量删除、认证/隔离、请求体限制、备案号页脚
+pytest          # 132 个用例：上传/删除补偿、迁移、加密、检索阈值、多轮历史、批量删除、认证/隔离、请求体限制、备案号页脚、备份/恢复/轮转
 ```
+
+## 备份与恢复（S2-4）
+
+```bash
+# 备份（容器内在线备份 → 取回宿主 backups/ → 独立哈希复核 → 保留最近 5 份）
+./scripts/backup.sh            # 可选参数 KEEP：保留份数，默认 5
+
+# 定时备份（上线服务器 crontab；本地开发不强制）：
+# 5 3 * * * cd /path/to/project && ./scripts/backup.sh >> backups/backup.log 2>&1
+
+# 恢复演练（真实卷备份 → 副本卷 rag-restore-test 还原 → 登录/文档/问答/Key 核对 → 自动清理）
+./scripts/restore_test.sh      # 默认取 backups/ 最新一份；可传参指定备份文件
+```
+
+- 备份内容：`rag.db`（SQLite 在线备份 API，一致性有保证）+ `chroma/`（向量库）+ `uploads/`（原始文档）+ `secrets/`（Key 加密主密钥——缺它恢复后 API Key 无法解密）；排除 `logs/` 与历史迁移 `*.bak`
+- 产物 `rag-backup-<UTC时间戳>.tar.gz` 内嵌 `manifest.json`（文件清单 + sha256 + 生成时间），还原前逐文件校验哈希，篡改/损坏一律拒绝
+- 演练只动独立副本卷，绝不触碰生产数据卷 `rag-data`；清理即恢复原状
+- 异地保存建议：把 `backups/` 最新产物下载到其他机器/网盘（备份目的地在本地 WSL 内同样受磁盘故障影响）
 
 ## 隐私与安全说明
 
