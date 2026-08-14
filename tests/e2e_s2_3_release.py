@@ -18,6 +18,7 @@ ignore_https_errors 仅测试用；线上 Let's Encrypt 无需该开关）。
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -27,7 +28,7 @@ from playwright.sync_api import Page, sync_playwright
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 BASE_URL = "https://localhost"
-SHOT_DIR = Path("/tmp/e2e-screenshots")
+SHOT_DIR = Path(os.environ.get("E2E_SHOT_DIR", "/tmp/e2e-screenshots"))
 PREFIX = "s23"
 
 ADMIN_USER, ADMIN_PASS = "admin", "AdminPass!@#2026"

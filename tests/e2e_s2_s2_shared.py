@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -29,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.fixture_docs import make_docx  # noqa: E402
 
 BASE_URL = "https://localhost"  # S2-3 起入口为 Caddy HTTPS（internal CA 本地证书）
-SHOT_DIR = Path("/tmp/e2e-screenshots")
+SHOT_DIR = Path(os.environ.get("E2E_SHOT_DIR", "/tmp/e2e-screenshots"))
 PREFIX = "s22"
 
 ADMIN_USER, ADMIN_PASS = "admin", "AdminPass!@#2026"
